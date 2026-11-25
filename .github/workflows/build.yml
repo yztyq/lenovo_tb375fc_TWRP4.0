@@ -156,18 +156,26 @@ jobs:
           set -x
           cd workspace
           source build/envsetup.sh
+          # The runner's shell is `bash -e`, so a failing lunch aborts the script
+          # before its log can be printed or copied (run #3 lost lunch.log this
+          # way). Keep -e off around the two build steps.
+          set +e
           lunch "$LUNCH_TARGET" > /tmp/lunch.log 2>&1
-          RC=$?
-          tail -60 /tmp/lunch.log
+          LUNCH_RC=$?
+          echo "== lunch rc=$LUNCH_RC =="
+          tail -n 200 /tmp/lunch.log
           cp /tmp/lunch.log artifacts/lunch.log || true
-          if [ $RC -ne 0 ]; then echo "lunch failed rc=$RC"; exit $RC; fi
+          if [ $LUNCH_RC -ne 0 ]; then
+            echo "lunch failed rc=$LUNCH_RC"
+            exit $LUNCH_RC
+          fi
           echo "== TARGET_DEVICE=$TARGET_DEVICE =="
           mka -j"$(nproc --all)" "${BUILD_PARTITION}image" > /tmp/build.log 2>&1
-          RC=$?
-          tail -150 /tmp/build.log
+          BUILD_RC=$?
+          echo "== build rc=$BUILD_RC at $(date -u) =="
+          tail -n 300 /tmp/build.log
           cp /tmp/build.log artifacts/build.log || true
-          echo "== build rc=$RC at $(date -u) =="
-          exit $RC
+          exit $BUILD_RC
 
       - name: Collect artifact
         id: collect
