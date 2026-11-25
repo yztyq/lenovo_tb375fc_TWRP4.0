@@ -18,7 +18,7 @@ on:
       lunch_target:
         description: 'Lunch target'
         required: false
-        default: 'twrp_tb375fc-aosp_current-eng'
+        default: 'twrp_tb375fc-eng'
       build_partition:
         description: 'Partition to build (this tablet has no recovery partition)'
         required: false
@@ -66,10 +66,10 @@ jobs:
           # fail the job over it.
           SWAP_KB=$(awk '/^SwapTotal/ {print $2}' /proc/meminfo)
           echo "existing swap: ${SWAP_KB:-0} kB"
-          if [ "${SWAP_KB:-0}" -lt 10000000 ]; then
+          if [ "${SWAP_KB:-0}" -lt 20000000 ]; then
             sudo swapoff -a || true
             sudo rm -f /swapfile || true
-            sudo fallocate -l 10G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=10240 status=none || true
+            sudo fallocate -l 20G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=20480 status=none || true
             sudo chmod 600 /swapfile || true
             sudo mkswap /swapfile || true
             sudo swapon /swapfile || true
@@ -165,6 +165,11 @@ jobs:
         run: |
           set -x
           cd workspace
+          # Run #7/#8 pinned it down: dmesg shows soong_build killed at 14.2 GB
+          # anon-rss while RAM (15 GB) and the whole 9 GB swap were consumed.
+          # Use the light `twrp_tb375fc-eng` product instead of the aosp_current
+          # variant (which pulls the entire AOSP module set into the bp parse),
+          # and still bound the Go heap in case it is not enough.
           # Run #7 pinned it down: the TERM trap's dmesg shows
           #   oom-kill ... task_memcg=/system.slice/hosted-compute-agent.service
           #   Out of memory: Killed process 18243 (soong_build) anon-rss:14068048kB
