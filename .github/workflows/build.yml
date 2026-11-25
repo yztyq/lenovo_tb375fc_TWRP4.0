@@ -186,9 +186,13 @@ jobs:
           # /tmp and the step never reached the copy). Stream mka to stdout as
           # well, and copy the log from a TERM/INT trap, so a future kill still
           # leaves evidence behind.
-          trap 'cp /tmp/build.log artifacts/build.log 2>/dev/null || true; echo "== trapped TERM/INT =="; exit 143' TERM INT
+          # Run #6 shows the job is killed right as soong_build finishes its
+          # ~6 min silent Android.bp parse and ninja is about to fan out. Dump
+          # kernel messages from the trap so the next kill proves or rules out OOM.
+          trap 'cp /tmp/build.log artifacts/build.log 2>/dev/null || true; echo "== trapped TERM/INT =="; free -h || true; df -h / || true; (dmesg 2>/dev/null || sudo dmesg 2>/dev/null) | tail -80 || true; exit 143' TERM INT
           set -o pipefail
-          mka -j"$(nproc --all)" "${BUILD_PARTITION}image" 2>&1 | tee /tmp/build.log
+          # -j2 instead of -j4: halve the peak memory of the ninja fan-out.
+          mka -j2 "${BUILD_PARTITION}image" 2>&1 | tee /tmp/build.log
           BUILD_RC=${PIPESTATUS[0]}
           trap - TERM INT
           echo "== build rc=$BUILD_RC at $(date -u) =="
