@@ -132,6 +132,16 @@ jobs:
           echo "== sync finished rc=$RC at $(date -u) =="
           exit $RC
 
+      - name: Drop .repo to free disk
+        run: |
+          # AOSP-16 sync leaves ~111 GB used / 35 GB free, and out/ needs 25-30 GB.
+          # Run #5 died 5 min into `mka` without a usable log, so buy margin first:
+          # repo metadata is not needed any more (place device tree clones fresh).
+          cd workspace
+          du -sh .repo 2>/dev/null || true
+          rm -rf .repo
+          df -h /
+
       - name: Place device tree
         env:
           DEVICE_PATH: ${{ inputs.device_path }}
