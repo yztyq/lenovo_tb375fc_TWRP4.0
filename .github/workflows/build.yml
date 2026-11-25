@@ -142,9 +142,10 @@ jobs:
           mkdir -p "device/$(dirname "$DEVICE_PATH")"
           git clone --depth=1 "https://github.com/${GITHUB_REPOSITORY}" "device/$DEVICE_PATH"
           ls "device/$DEVICE_PATH"
-          echo "--- prebuilt GKI kernel ---"
-          ls -l kernel/prebuilts/6.1/arm64/
-          test -f kernel/prebuilts/6.1/arm64/kernel-6.1 || { echo "kernel-6.1 missing"; exit 1; }
+          echo "--- kernel prebuilts (optional) ---"
+          # vendor_boot has no kernel segment (proved by the stock v4 header);
+          # the kernel comes from the stock boot.img, so absent prebuilts are fine.
+          ls -l kernel/prebuilts/6.1/arm64/ 2>/dev/null || echo "kernel/prebuilts/6.1/arm64 absent - not needed (TARGET_NO_KERNEL=true)"
 
       - name: Build
         env:

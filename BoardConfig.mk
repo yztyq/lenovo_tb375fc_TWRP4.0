@@ -36,13 +36,14 @@ TARGET_NO_BOOTLOADER := true
 TARGET_BOARD_PLATFORM := mt6897
 TARGET_BOOTLOADER_BOARD_NAME := mt8792
 
-# Kernel: GKI 6.1 prebuilt shipped by the TWRP-Test minimal manifest.
-# The device runs 6.1.138, so the 6.1 GKI is the generation that matches the
-# vendor modules instead of the 6.12 one used by the SM88XX tree.
-TARGET_KERNEL_ARCH := arm64
-TARGET_KERNEL_HEADER_ARCH := arm64
+# Kernel: the stock vendor_boot carries NO kernel segment - the v4 vendor_boot
+# header has no kernel_size field at all, and KernelAddr 0x40000000 is just the
+# load address the bootloader uses for the kernel shipped in the stock boot.img
+# (ANDROID! header v4, kernel_size 16,543,287). So the tree must neither
+# rebuild nor package a kernel, and must not point at the manifest prebuilts
+# (kernel/prebuilts/6.1/arm64 is not synced by twrp-16.0 and does not exist).
+TARGET_NO_KERNEL := true
 BOARD_KERNEL_IMAGE_NAME := Image
-TARGET_PREBUILT_KERNEL := kernel/prebuilts/6.1/arm64/kernel-6.1
 BOARD_BOOT_HEADER_VERSION := 4
 BOARD_KERNEL_PAGESIZE := 4096
 BOARD_KERNEL_BASE := 0x3fff8000

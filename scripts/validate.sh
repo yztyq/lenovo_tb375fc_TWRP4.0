@@ -45,7 +45,8 @@ chk BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE 67108864
 chk BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT true
 chk BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT true
 chk TARGET_NO_RECOVERY true
-grep -qE '^[[:space:]]*TARGET_PREBUILT_KERNEL[[:space:]]*:?=[[:space:]]*kernel/prebuilts/6\.1/arm64/kernel-6\.1' "$bc" && ok "TARGET_PREBUILT_KERNEL uses GKI 6.1 (matches device 6.1.138)" || bad "TARGET_PREBUILT_KERNEL must be kernel/prebuilts/6.1/arm64/kernel-6.1"
+grep -qE '^[[:space:]]*TARGET_NO_KERNEL[[:space:]]*:?=[[:space:]]*true' "$bc" && ok "TARGET_NO_KERNEL = true (vendor_boot carries no kernel segment)" || bad "TARGET_NO_KERNEL must be true"
+if grep -qE '^[[:space:]]*TARGET_PREBUILT_KERNEL[[:space:]]*:?=' "$bc"; then bad "TARGET_PREBUILT_KERNEL must not be set (manifest prebuilts path is absent)"; else ok "no TARGET_PREBUILT_KERNEL"; fi
 grep -qE '^[[:space:]]*TARGET_PREBUILT_DTB[[:space:]]*:?=' "$bc" && ok "TARGET_PREBUILT_DTB set" || bad "TARGET_PREBUILT_DTB missing"
 
 sec "5. no QCOM leftovers (this is MediaTek)"
