@@ -1,0 +1,12 @@
+# Charger
+ro.charger.enable_suspend=1
+
+# FUSE passthrough
+persist.sys.fuse.passthrough.enable=true
+
+# Display
+vendor.display.enable_spr=0
+
+# MediaTek tee / rpmb: keep the stock property names so the ROM's own
+# teei_daemon sees the same values as in normal boot.
+ro.vendor.mtk_tee_gpapi_support=1

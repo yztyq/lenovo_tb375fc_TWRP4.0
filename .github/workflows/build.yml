@@ -1,0 +1,183 @@
+name: Build TWRP TB375FC
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_url:
+        description: 'TWRP minimal manifest URL'
+        required: false
+        default: 'https://github.com/TWRP-Test/platform_manifest_twrp_aosp'
+      manifest_branch:
+        description: 'Manifest branch (TWRP 4.0 = twrp-16.0)'
+        required: false
+        default: 'twrp-16.0'
+      device_path:
+        description: 'Device tree path inside the source tree'
+        required: false
+        default: 'lenovo/tb375fc'
+      lunch_target:
+        description: 'Lunch target'
+        required: false
+        default: 'twrp_tb375fc-aosp_current-eng'
+      build_partition:
+        description: 'Partition to build (this tablet has no recovery partition)'
+        required: false
+        default: 'vendor_boot'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Compute build metadata
+        id: meta
+        run: |
+          TS=$(date -u +%Y%m%d-%H%M%S)
+          SHA7=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "ts=$TS"          >> "$GITHUB_OUTPUT"
+          echo "sha7=$SHA7"      >> "$GITHUB_OUTPUT"
+          echo "outname=vendor_boot_tb375fc_${TS}_${SHA7}" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        run: |
+          set -x
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/local/lib/android/sdk
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/lib/jvm
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          df -h
+
+      - name: Set up swap
+        run: |
+          set -x
+          sudo fallocate -l 16G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=16384
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Install dependencies
+        run: |
+          set -x
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends git-core gnupg flex bison build-essential \
+            zip unzip curl wget rsync libc6-dev-i386 lib32ncurses5-dev x11proto-core-dev \
+            libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc fontconfig lz4 \
+            python3 python-is-python3 ccache
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          max-size: 4G
+
+      - name: Init repo
+        env:
+          MANIFEST_URL: ${{ inputs.manifest_url }}
+          MANIFEST_BRANCH: ${{ inputs.manifest_branch }}
+        run: |
+          set -eo pipefail
+          git config --global user.name  "ci-builder"
+          git config --global user.email "ci@localhost"
+          git config --global color.ui false
+          mkdir -p ~/bin
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          export PATH=~/bin:$PATH
+          mkdir -p workspace && cd workspace
+          echo "== repo init: $MANIFEST_URL / $MANIFEST_BRANCH =="
+          repo init --depth=1 --no-clone-bundle -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" 2>&1 | tail -40
+
+      - name: Repo sync
+        env:
+          MANIFEST_URL: ${{ inputs.manifest_url }}
+          MANIFEST_BRANCH: ${{ inputs.manifest_branch }}
+        run: |
+          set -eo pipefail
+          export PATH=~/bin:$PATH
+          cd workspace
+          echo "== starting sync at $(date -u) =="
+          ( while true; do sleep 300; echo "[sync heartbeat $(date -u)] $(du -sh .repo 2>/dev/null | cut -f1)"; done ) &
+          HEARTBEAT=$!
+          repo sync -c -j4 --force-sync --no-clone-bundle --no-tags 2>&1 | grep -v "^remote: " | tail -80
+          RC=${PIPESTATUS[0]}
+          kill $HEARTBEAT || true
+          echo "== sync finished rc=$RC at $(date -u) =="
+          df -h
+          exit $RC
+
+      - name: Place device tree
+        env:
+          DEVICE_PATH: ${{ inputs.device_path }}
+        run: |
+          set -eo pipefail
+          cd workspace
+          rm -rf "device/$DEVICE_PATH"
+          mkdir -p "device/$(dirname "$DEVICE_PATH")"
+          git clone --depth=1 "https://github.com/${GITHUB_REPOSITORY}" "device/$DEVICE_PATH"
+          ls "device/$DEVICE_PATH"
+          echo "--- looking for the prebuilt GKI kernel ---"
+          ls -l kernel/prebuilts/6.1/arm64/ || true
+          test -f kernel/prebuilts/6.1/arm64/kernel-6.1 || { echo "kernel-6.1 missing, listing:"; ls kernel/prebuilts/6.1/arm64/; exit 1; }
+
+      - name: Build
+        env:
+          DEVICE_PATH: ${{ inputs.device_path }}
+          LUNCH_TARGET: ${{ inputs.lunch_target }}
+          BUILD_PARTITION: ${{ inputs.build_partition }}
+        run: |
+          set -eo pipefail
+          cd workspace
+          source build/envsetup.sh
+          lunch "$LUNCH_TARGET"
+          echo "== TARGET_DEVICE=$TARGET_DEVICE =="
+          mka -j"$(nproc --all)" "${BUILD_PARTITION}image" 2>&1 | tail -120
+          echo "== build finished at $(date -u) =="
+
+      - name: Collect artifact
+        id: collect
+        env:
+          OUTNAME: ${{ steps.meta.outputs.outname }}
+          BUILD_PARTITION: ${{ inputs.build_partition }}
+        run: |
+          set -eo pipefail
+          cd workspace
+          OUT="out/target/product/tb375fc"
+          ls -l "$OUT"/*.img || true
+          mkdir -p artifacts
+          # vendor_boot is what this tablet boots into recovery; fall back to
+          # recovery.img only if a tree with a dedicated partition is used.
+          SRC=""
+          for cand in "$OUT/${BUILD_PARTITION}.img" "$OUT/vendor_boot.img" "$OUT/recovery.img" "$OUT/boot.img"; do
+            if [ -f "$cand" ]; then SRC="$cand"; break; fi
+          done
+          if [ -z "$SRC" ]; then echo "no image produced"; exit 1; fi
+          cp "$SRC" "artifacts/${OUTNAME}.img"
+          {
+            echo "name=${OUTNAME}"
+            echo "source=$SRC"
+            echo "size=$(stat -c%s "$SRC")"
+            echo "md5=$(md5sum "$SRC" | cut -d' ' -f1)"
+            echo "sha256=$(sha256sum "$SRC" | cut -d' ' -f1)"
+            echo "commit=${{ github.sha }}"
+            echo "lunch=${{ inputs.lunch_target }}"
+            echo "manifest=${{ inputs.manifest_url }}@${{ inputs.manifest_branch }}"
+            echo "built_utc=$(date -u)"
+          } | tee "artifacts/${OUTNAME}.build_info.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.outname }}
+          path: workspace/artifacts/*
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,25 @@
+# init.recovery.mt8792.rc
+#
+# The bootloader reports ro.hardware=mt8792 even though the SoC is MT6897
+# (ro.board.platform=mt6897). init therefore looks for
+# init.recovery.${ro.hardware}.rc, i.e. THIS filename — not mt6897.
+# Verified on device: ro.boot.hardware = mt8792.
+#
+# Keep this file deliberately minimal. Every service started here must exist
+# in the recovery image, otherwise init logs "service not found" and the
+# recovery keeps running, but with confusing state.
+
+on init
+    # USB gadget controller, same value as the stock init.recovery.mt8792.rc
+    write /sys/class/udc/11201000.usb0/soft_connect 1
+
+on fs
+    # The stock fstab mounts persist rw at /mnt/vendor/persist for the TEE
+    # filesystem store. TWRP mounts it through recovery.fstab; make sure the
+    # directory exists before vold/teei looks for it.
+    mkdir /mnt/vendor/persist 0770 system system
+
+on late-fs
+    # nothing device specific yet; kept as a hook
+    chown system system /sys/class/leds/lcd-backlight/brightness
+    chmod 0664 /sys/class/leds/lcd-backlight/brightness
