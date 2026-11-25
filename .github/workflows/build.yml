@@ -66,10 +66,10 @@ jobs:
           # fail the job over it.
           SWAP_KB=$(awk '/^SwapTotal/ {print $2}' /proc/meminfo)
           echo "existing swap: ${SWAP_KB:-0} kB"
-          if [ "${SWAP_KB:-0}" -lt 8000000 ]; then
+          if [ "${SWAP_KB:-0}" -lt 10000000 ]; then
             sudo swapoff -a || true
             sudo rm -f /swapfile || true
-            sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192 status=none || true
+            sudo fallocate -l 10G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=10240 status=none || true
             sudo chmod 600 /swapfile || true
             sudo mkswap /swapfile || true
             sudo swapon /swapfile || true
@@ -165,6 +165,15 @@ jobs:
         run: |
           set -x
           cd workspace
+          # Run #7 pinned it down: the TERM trap's dmesg shows
+          #   oom-kill ... task_memcg=/system.slice/hosted-compute-agent.service
+          #   Out of memory: Killed process 18243 (soong_build) anon-rss:14068048kB
+          # i.e. soong_build ate 13.4 GB while parsing Android.bp and the 15 GB
+          # cgroup OOM-killed it, which the runner reports as the bogus
+          # "runner has received a shutdown signal". soong_build is a Go binary,
+          # so GOMEMLIMIT/GOGC are the real knobs: cap the heap, GC earlier.
+          export GOMEMLIMIT=8GiB
+          export GOGC=25
           source build/envsetup.sh
           # The runner's shell is `bash -e`, so a failing lunch aborts the script
           # before its log can be printed or copied (run #3 lost lunch.log this
