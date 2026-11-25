@@ -91,6 +91,15 @@ BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := erofs
 BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := erofs
 BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE := erofs
 BOARD_ODMIMAGE_FILE_SYSTEM_TYPE := erofs
+# board_config.mk:803 aborts lunch when TARGET_COPY_OUT_VENDOR_DLKM is
+# 'vendor_dlkm' but neither BOARD_PREBUILT_VENDOR_DLKMIMAGE nor
+# BOARD_VENDOR_DLKMIMAGE_FILE_SYSTEM_TYPE is set. The old ofox16 tree died
+# exactly here (run 45675462014, step 9). Recovery never builds these
+# images, so any valid type satisfies the check; ext4 avoids needing erofs
+# build tools.
+BOARD_VENDOR_DLKMIMAGE_FILE_SYSTEM_TYPE := ext4
+BOARD_ODM_DLKMIMAGE_FILE_SYSTEM_TYPE := ext4
+BOARD_SYSTEM_DLKMIMAGE_FILE_SYSTEM_TYPE := ext4
 TARGET_USERIMAGES_USE_F2FS := true
 TARGET_USES_EROFS := true
 
