@@ -53,18 +53,31 @@ jobs:
           sudo rm -rf /usr/local/.ghcup
           sudo rm -rf /opt/ghc
           sudo rm -rf /usr/local/share/boost
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
           sudo apt-get clean
           df -h
 
       - name: Set up swap
         run: |
           set -x
-          sudo fallocate -l 16G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=16384
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
           free -h
+          # The hosted runner already keeps /swapfile mounted as swap, so
+          # fallocate/dd on that path fail with "Text file busy" (this killed
+          # run #1 after 3m). Only create swap when there is none, and never
+          # fail the job over it.
+          SWAP_KB=$(awk '/^SwapTotal/ {print $2}' /proc/meminfo)
+          echo "existing swap: ${SWAP_KB:-0} kB"
+          if [ "${SWAP_KB:-0}" -lt 8000000 ]; then
+            sudo swapoff -a || true
+            sudo rm -f /swapfile || true
+            sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192 status=none || true
+            sudo chmod 600 /swapfile || true
+            sudo mkswap /swapfile || true
+            sudo swapon /swapfile || true
+          else
+            echo "runner already has enough swap, skipping"
+          fi
+          free -h
+          exit 0
 
       - name: Install dependencies
         run: |
@@ -102,17 +115,21 @@ jobs:
           MANIFEST_URL: ${{ inputs.manifest_url }}
           MANIFEST_BRANCH: ${{ inputs.manifest_branch }}
         run: |
-          set -eo pipefail
+          set -x
           export PATH=~/bin:$PATH
           cd workspace
-          echo "== starting sync at $(date -u) =="
-          ( while true; do sleep 300; echo "[sync heartbeat $(date -u)] $(du -sh .repo 2>/dev/null | cut -f1)"; done ) &
-          HEARTBEAT=$!
-          repo sync -c -j4 --force-sync --no-clone-bundle --no-tags 2>&1 | grep -v "^remote: " | tail -80
-          RC=${PIPESTATUS[0]}
-          kill $HEARTBEAT || true
-          echo "== sync finished rc=$RC at $(date -u) =="
+          mkdir -p artifacts
           df -h
+          echo "== starting sync at $(date -u) =="
+          ( while true; do sleep 300; echo "[heartbeat $(date -u)] .repo=$(du -sh .repo 2>/dev/null | cut -f1) freeRoot=$(df -h / | awk 'NR==2{print $4}')"; done ) &
+          HB=$!
+          repo sync -c -j4 --force-sync --no-clone-bundle --no-tags > /tmp/repo_sync.log 2>&1
+          RC=$?
+          kill $HB 2>/dev/null || true
+          tail -80 /tmp/repo_sync.log
+          cp /tmp/repo_sync.log artifacts/repo_sync.log || true
+          df -h
+          echo "== sync finished rc=$RC at $(date -u) =="
           exit $RC
 
       - name: Place device tree
@@ -125,9 +142,9 @@ jobs:
           mkdir -p "device/$(dirname "$DEVICE_PATH")"
           git clone --depth=1 "https://github.com/${GITHUB_REPOSITORY}" "device/$DEVICE_PATH"
           ls "device/$DEVICE_PATH"
-          echo "--- looking for the prebuilt GKI kernel ---"
-          ls -l kernel/prebuilts/6.1/arm64/ || true
-          test -f kernel/prebuilts/6.1/arm64/kernel-6.1 || { echo "kernel-6.1 missing, listing:"; ls kernel/prebuilts/6.1/arm64/; exit 1; }
+          echo "--- prebuilt GKI kernel ---"
+          ls -l kernel/prebuilts/6.1/arm64/
+          test -f kernel/prebuilts/6.1/arm64/kernel-6.1 || { echo "kernel-6.1 missing"; exit 1; }
 
       - name: Build
         env:
@@ -135,13 +152,21 @@ jobs:
           LUNCH_TARGET: ${{ inputs.lunch_target }}
           BUILD_PARTITION: ${{ inputs.build_partition }}
         run: |
-          set -eo pipefail
+          set -x
           cd workspace
           source build/envsetup.sh
-          lunch "$LUNCH_TARGET"
+          lunch "$LUNCH_TARGET" > /tmp/lunch.log 2>&1
+          RC=$?
+          tail -60 /tmp/lunch.log
+          cp /tmp/lunch.log artifacts/lunch.log || true
+          if [ $RC -ne 0 ]; then echo "lunch failed rc=$RC"; exit $RC; fi
           echo "== TARGET_DEVICE=$TARGET_DEVICE =="
-          mka -j"$(nproc --all)" "${BUILD_PARTITION}image" 2>&1 | tail -120
-          echo "== build finished at $(date -u) =="
+          mka -j"$(nproc --all)" "${BUILD_PARTITION}image" > /tmp/build.log 2>&1
+          RC=$?
+          tail -150 /tmp/build.log
+          cp /tmp/build.log artifacts/build.log || true
+          echo "== build rc=$RC at $(date -u) =="
+          exit $RC
 
       - name: Collect artifact
         id: collect
@@ -152,10 +177,7 @@ jobs:
           set -eo pipefail
           cd workspace
           OUT="out/target/product/tb375fc"
-          ls -l "$OUT"/*.img || true
-          mkdir -p artifacts
-          # vendor_boot is what this tablet boots into recovery; fall back to
-          # recovery.img only if a tree with a dedicated partition is used.
+          ls -l "$OUT"/*.img 2>/dev/null || true
           SRC=""
           for cand in "$OUT/${BUILD_PARTITION}.img" "$OUT/vendor_boot.img" "$OUT/recovery.img" "$OUT/boot.img"; do
             if [ -f "$cand" ]; then SRC="$cand"; break; fi
@@ -175,9 +197,10 @@ jobs:
           } | tee "artifacts/${OUTNAME}.build_info.txt"
 
       - name: Upload artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.outname }}
           path: workspace/artifacts/*
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
