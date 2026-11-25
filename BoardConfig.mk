@@ -162,8 +162,11 @@ TW_DEFAULT_LANGUAGE := zh_CN
 TW_EXTRA_LANGUAGES := true
 TW_USE_TOOLBOX := true
 TW_USE_SERIALNO_PROPERTY_FOR_DEVICE_ID := true
-TW_LOAD_VENDOR_MODULES := "mtk_tinysys_scp.ko mtk_tinysys_sspm.ko"
-TW_LOAD_VENDOR_MODULES_EXCLUDE_GKI := true
+# Modules: the recovery ramdisk ships 222 .ko plus modules.load.recovery
+# (212 entries, including nt36532.ko and the panel-alpha-* drivers), so init
+# loads them from the list. Do NOT name individual modules here — earlier a
+# nonexistent mtk_tinysys_scp.ko was referenced and init logged "service not
+# found" on every boot.
 
 # COPY
 TARGET_COPY_OUT_VENDOR := vendor
