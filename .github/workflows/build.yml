@@ -164,6 +164,7 @@ jobs:
           ls -l kernel/prebuilts/6.1/arm64/ 2>/dev/null || echo "kernel/prebuilts/6.1/arm64 absent - not needed (TARGET_NO_KERNEL=true)"
 
       - name: Build
+        id: build
         env:
           DEVICE_PATH: ${{ inputs.device_path }}
           LUNCH_TARGET: ${{ inputs.lunch_target }}
@@ -237,30 +238,53 @@ jobs:
           cp /tmp/build.log artifacts/build.log || true
           df -h / || true
           free -h || true
+          OUT="out/target/product/tb375fc"
+          REC=$(ls "$OUT"/obj/PACKAGING/vendor_ramdisk_fragments_intermediates/recovery.cpio* 2>/dev/null | head -n 1)
+          DTB="$OUT/dtb.img"
+          if [ "$BUILD_RC" -ne 0 ] && [ -n "$REC" ] && [ -f "$DTB" ]; then
+            # 有些 TWRP/OF 分支的 system/tools/mkbootimg 是旧版，不认
+            # --ramdisk_type / --vendor_ramdisk_fragment，最后一步 vendor_boot.img
+            # 必然 ValueError。此时 recovery.cpio 和 dtb.img 都已编好，用零件拼。
+            echo "== mkbootimg step failed (old mkbootimg.py) - have parts, continue =="
+            echo "rec_path=$REC" >> "$GITHUB_OUTPUT"
+            echo "dtb_path=$DTB" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           exit $BUILD_RC
 
       - name: Splice official platform ramdisk
         # 本树编出来的 vendor_boot 只有 recovery 一片（platform 片是 4 字节空片）。
         # 必须把官方 platform 片（含 222 个 6.1.138 模块）拼回去，并按 v4 规则重写
         # 分片表（platform type=1 / recovery type=2），否则刷进去进不了 recovery。
-        # 不做这一步产物照样能编出来，但装不进 recovery。
         if: always()
+        id: splice
         env:
           DEVICE_PATH: ${{ inputs.device_path }}
+          REC: ${{ steps.build.outputs.rec_path }}
+          DTB: ${{ steps.build.outputs.dtb_path }}
         run: |
           cd workspace
           OUT="out/target/product/tb375fc"
-          SRC=$(ls "$OUT"/vendor_boot*.img 2>/dev/null | head -n 1)
-          if [ -z "$SRC" ]; then
-            echo "no vendor_boot*.img produced - nothing to splice"
+          SRC=$(find "$OUT" -maxdepth 1 -name 'vendor_boot*.img' -size +1k 2>/dev/null | head -n 1)
+          echo "vendor_boot.img: ${SRC:-<none>}  parts: rec=${REC:-<none>} dtb=${DTB:-<none>}"
+          if [ -n "$SRC" ]; then
+            python3 "device/$DEVICE_PATH/scripts/splice_platform.py" \
+              --input "$SRC" \
+              --platform "device/$DEVICE_PATH/prebuilt/platform_ramdisk.lz4" \
+              --output "$OUT/vendor_boot_TWRP_64MB.img" \
+              --size 67108864
+          elif [ -n "$REC" ] && [ -n "$DTB" ]; then
+            python3 "device/$DEVICE_PATH/scripts/splice_platform.py" \
+              --recovery-cpio "$REC" \
+              --dtb "$DTB" \
+              --header "device/$DEVICE_PATH/prebuilt/vendor_boot_header.bin" \
+              --platform "device/$DEVICE_PATH/prebuilt/platform_ramdisk.lz4" \
+              --output "$OUT/vendor_boot_TWRP_64MB.img" \
+              --size 67108864
+          else
+            echo "no vendor_boot*.img and no recovery.cpio parts - nothing to splice"
             exit 0
           fi
-          echo "splicing: $SRC"
-          python3 "device/$DEVICE_PATH/scripts/splice_platform.py" \
-            --input "$SRC" \
-            --platform "device/$DEVICE_PATH/prebuilt/platform_ramdisk.lz4" \
-            --output "$OUT/vendor_boot_TWRP_64MB.img" \
-            --size 67108864
           ls -l "$OUT/vendor_boot_TWRP_64MB.img"
 
       - name: Collect artifact

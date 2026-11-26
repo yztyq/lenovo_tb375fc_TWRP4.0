@@ -14,8 +14,20 @@
      platform 包保持一致（bootloader 对这个格式最稳）。
 
 用法：
+  # A. 从编好的 vendor_boot.img 里取 recovery 分片（mkbootimg 支持分片时走这条）
   python3 scripts/splice_platform.py \
-      --input  $OUT/../vendor_boot.img \
+      --input  $OUT/vendor_boot.img \
+      --platform prebuilt/platform_ramdisk.lz4 \
+      --output vendor_boot_TWRP.img \
+      --size 67108864
+
+  # B. 直接从零件拼（fox_16.0 的 system/tools/mkbootimg 是旧版，不认
+  #    --vendor_ramdisk_fragment，最后一步必然 ValueError；但 recovery.cpio.lz4
+  #    和 dtb.img 都已经编出来了，用零件拼更稳）
+  python3 scripts/splice_platform.py \
+      --recovery-cpio $OUT/obj/PACKAGING/vendor_ramdisk_fragments_intermediates/recovery.cpio.lz4 \
+      --dtb           $OUT/dtb.img \
+      --header        prebuilt/vendor_boot_header.bin \
       --platform prebuilt/platform_ramdisk.lz4 \
       --output vendor_boot_TWRP.img \
       --size 67108864
@@ -189,38 +201,61 @@ def main():
     ap.add_argument('--platform', default=os.path.join(dev, 'prebuilt', 'platform_ramdisk.lz4'))
     ap.add_argument('--output', default='vendor_boot_TWRP_64MB.img')
     ap.add_argument('--size', type=int, default=DEFAULT_SIZE)
+    # 零件模式：直接给 recovery 分片 cpio、dtb.img 和 2128 字节 vendor_boot 头模板，
+    # 完全绕开编不出来的 vendor_boot.img（fox_16.0 的旧 mkbootimg 就是这样）。
+    ap.add_argument('--recovery-cpio', dest='recovery_cpio', default=None)
+    ap.add_argument('--dtb', dest='dtb', default=None)
+    ap.add_argument('--header', dest='header', default=None)
     a = ap.parse_args()
 
-    if not os.path.exists(a.input):
-        sys.exit('[!] 找不到编出来的 vendor_boot.img: %s' % a.input)
     if not os.path.exists(a.platform):
         sys.exit('[!] 缺官方 platform 分片: %s' % a.platform)
 
-    vb = parse_vendor_boot(a.input)
-    print('[i] 输入 %s : vrs=%s dtb=%s 分片=%d' %
-          (a.input, format(vb['vrs'], ','), format(vb['dtb_size'], ','), len(vb['frags'])))
-    for f in vb['frags']:
-        print('    - frag size=%s type=%d' % (format(f['size'], ','), f['type']))
-
-    # 按分片表里的 type 选：1=platform，2=recovery。这个 type 位是 bootloader 的
-    # 唯一依据，不能靠内容猜（platform 里也有 init.recovery.* / recovery.fstab）。
-    rec = None
-    for f in vb['frags']:
-        if f['type'] != 2:
-            continue
-        cpio, codec = decode_ramdisk(f['data'])
-        rec = cpio
-        print('[i] recovery 分片：raw=%s (%s, 解压 %d 字节)' %
-              (format(f['size'], ','), codec, len(cpio)))
-        break
-    if rec is None:
-        # 兜底：老工具可能不写 type，按内容再试一次
+    if a.recovery_cpio:
+        for need, val in (('recovery cpio', a.recovery_cpio), ('dtb', a.dtb), ('header', a.header)):
+            if not val or not os.path.exists(val):
+                sys.exit('[!] 零件模式缺 %s: %s' % (need, val))
+        hdr = open(a.header, 'rb').read()[:HDR_SIZE]
+        if hdr[:8] != b'VNDRBOOT':
+            sys.exit('[!] header 模板不是 VNDRBOOT: %s' % a.header)
+        dtb = open(a.dtb, 'rb').read()
+        raw = open(a.recovery_cpio, 'rb').read()
+        rec, codec = decode_ramdisk(raw)
+        print('[i] 零件模式：recovery.cpio=%s B (%s, 解压 %s B), dtb=%s B' %
+              (format(len(raw), ','), codec, format(len(rec), ','), format(len(dtb), ',')))
+        header = hdr
+        dtb_size = len(dtb)
+    else:
+        if not os.path.exists(a.input):
+            sys.exit('[!] 找不到编出来的 vendor_boot.img: %s' % a.input)
+        vb = parse_vendor_boot(a.input)
+        print('[i] 输入 %s : vrs=%s dtb=%s 分片=%d' %
+              (a.input, format(vb['vrs'], ','), format(vb['dtb_size'], ','), len(vb['frags'])))
         for f in vb['frags']:
+            print('    - frag size=%s type=%d' % (format(f['size'], ','), f['type']))
+        header = vb['header']
+        dtb = vb['dtb']
+        dtb_size = vb['dtb_size']
+
+        # 按分片表里的 type 选：1=platform，2=recovery。这个 type 位是 bootloader 的
+        # 唯一依据，不能靠内容猜（platform 里也有 init.recovery.* / recovery.fstab）。
+        rec = None
+        for f in vb['frags']:
+            if f['type'] != 2:
+                continue
             cpio, codec = decode_ramdisk(f['data'])
-            if any(x in cpio for x in (b'twres/', b'FFiles/', b'system/bin/twrp')):
-                rec = cpio
-                print('[i] 按内容认定 recovery 分片（type 位缺失）：%s' % codec)
-                break
+            rec = cpio
+            print('[i] recovery 分片：raw=%s (%s, 解压 %d 字节)' %
+                  (format(f['size'], ','), codec, len(cpio)))
+            break
+        if rec is None:
+            # 兜底：老工具可能不写 type，按内容再试一次
+            for f in vb['frags']:
+                cpio, codec = decode_ramdisk(f['data'])
+                if any(x in cpio for x in (b'twres/', b'FFiles/', b'system/bin/twrp')):
+                    rec = cpio
+                    print('[i] 按内容认定 recovery 分片（type 位缺失）：%s' % codec)
+                    break
     if rec is None:
         sys.exit('[!] 输入里没找到 recovery 分片（是不是 TARGET_NO_RECOVERY 还开着？）')
     if not any(x in rec for x in (b'twres/', b'FFiles/', b'system/bin/twrp', b'tb373fu')):
@@ -228,7 +263,10 @@ def main():
 
     plat = open(a.platform, 'rb').read()
     rec_z, codec = encode_ramdisk(rec)
-    vrs, total = build_image(vb['header'], plat, rec_z, vb['dtb'], a.size, a.output)
+    if dtb_size and len(dtb) != dtb_size:
+        print('[!] dtb 实际 %s B，头和 BOARD_DTB_SIZE 都写的是 %s B' %
+              (format(len(dtb), ','), format(dtb_size, ',')))
+    vrs, total = build_image(header, plat, rec_z, dtb, a.size, a.output)
     print('[✓] 输出 %s' % a.output)
     print('    platform = %s B (官方原片)' % format(len(plat), ','))
     print('    recovery = %s B (%s, 裸 cpio %s B)' %
