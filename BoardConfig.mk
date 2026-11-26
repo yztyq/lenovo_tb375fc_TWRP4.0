@@ -61,7 +61,14 @@ BOARD_MKBOOTIMG_ARGS += --dtb_offset $(BOARD_DTB_OFFSET)
 BOARD_RAMDISK_USE_LZ4 := true
 
 # DTB verified from the stock image (411,876 B)
-TARGET_PREBUILT_DTB := $(DEVICE_PATH)/prebuilt/dtb
+# AOSP16 only knows BOARD_PREBUILT_DTBIMAGE_DIR when BOARD_INCLUDE_DTB_IN_BOOTIMG
+# is true: build/make/core/Makefile runs `cat $(BOARD_PREBUILT_DTBIMAGE_DIR)/*.dtb`
+# into $(PRODUCT_OUT)/dtb.img (board_config.mk:985 requires the flag to be true).
+# TARGET_PREBUILT_DTB is not an AOSP variable, so dtb.img had no generating rule
+# and ninja died with: "'dtb.img', needed by 'vendor_boot.img', missing and no
+# known rule to make it". The single .dtb below is the stock dtb segment,
+# 411,876 B, MD5 c04d985375c5ed4196d3df00a28d370d.
+BOARD_PREBUILT_DTBIMAGE_DIR := $(DEVICE_PATH)/prebuilt/dtb_dir
 BOARD_INCLUDE_DTB_IN_BOOTIMG := true
 
 # vendor_boot as recovery (no recovery partition on this tablet)
