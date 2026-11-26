@@ -74,7 +74,13 @@ BOARD_INCLUDE_DTB_IN_BOOTIMG := true
 # vendor_boot as recovery (no recovery partition on this tablet)
 BOARD_USES_GENERIC_KERNEL_IMAGE := true
 BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
-BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
+# A two-fragment vendor_ramdisk is poison here. With the INCLUDE flag on, AOSP packs
+# an (empty) platform "vendor_ramdisk" lz4 frame plus a recovery.cpio lz4 frame, so
+# the image's vendor_ramdisk starts with two 02 21 4c 18 magics back to back and a
+# single-stream legacy lz4 decompressor (bootloader / init) chokes on it.
+# Leaving the flag off makes core/Makefile:1620-1628 run mkbootfs over the recovery
+# root straight into the vendor ramdisk: one lz4 stream, the same shape as stock.
+# BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
 TARGET_NO_RECOVERY := true
 BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE := 67108864
 # AOSP16 has no BOARD_VENDOR_CMDLINE: board_config.mk:317 sets
