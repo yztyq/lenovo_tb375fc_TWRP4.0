@@ -175,6 +175,11 @@ if [ -f "$wf" ]; then
   grep -q 'date -u +%Y%m%d-%H%M%S' "$wf" && ok "timestamped artifact naming" || warn "no timestamp"
   grep -q 'mka -j2 vendorbootimage' "$wf" && ok "workflow builds vendorbootimage" || bad "workflow never runs vendorbootimage"
   grep -q 'vendor_boot_TWRP_64MB.img' "$wf" && ok "workflow collects the spliced image" || bad "spliced image not collected"
+  # 产物要能直接下载：Release 发布 + contents: write 两项必须成对出现，缺一个就会被
+  # GitHub 以 403 拒掉（默认 token 只读）。
+  grep -q 'softprops/action-gh-release' "$wf" && ok "workflow publishes a release" || bad "workflow does not publish a release"
+  grep -qE '^\s*permissions:\s*$' "$wf" && grep -q 'contents: write' "$wf" \
+    && ok "workflow grants contents: write" || bad "release needs 'permissions: contents: write'"
 else
   bad "build.yml missing"
 fi

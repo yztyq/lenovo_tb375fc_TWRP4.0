@@ -57,6 +57,11 @@ The workflow is `Build TWRP TB375FC` (manual dispatch). Defaults:
 The artifact is timestamped: `vendor_boot_tb375fc_<UTC>_<sha7>.img`, plus a
 `*.build_info.txt` carrying size, md5, sha256, commit and manifest.
 
+每次构建成功时，同一张 img 还会被自动发布到 **Releases**（tag
+`twrp-tb375fc-<UTC>`，标记为 pre-release）。Releases 页可以当下载中心用，不必再进
+Actions 翻 artifact；Release 正文带 md5/sha256、分片结构与刷入命令。发布用
+`softprops/action-gh-release`，需要 workflow 顶部的 `permissions: contents: write`。
+
 Locally, with a synced tree, copy this repo to `device/lenovo/tb375fc` and run:
 
 ```sh

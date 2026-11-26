@@ -28,6 +28,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# 发布 Release 需要写权限（默认 GITHUB_TOKEN 在 fork/私有仓库上通常是只读）
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -287,3 +291,69 @@ jobs:
           path: workspace/artifacts/*
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Build release notes
+        # 成包里有一张 vendor_boot*.img 才发 Release；没编出来就只留 artifact + 日志。
+        if: always()
+        id: relnotes
+        env:
+          OUTNAME: ${{ steps.meta.outputs.outname }}
+        run: |
+          cd workspace
+          IMG=$(ls artifacts/*.img 2>/dev/null | head -n 1 || true)
+          if [ -z "$IMG" ]; then
+            echo "no image in artifacts - skip release"
+            echo "has_img=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "has_img=true" >> "$GITHUB_OUTPUT"
+          MB=$(awk -v b="$(stat -c%s "$IMG")" 'BEGIN{printf "%.1f", b/1048576}')
+          {
+            echo "## ${OUTNAME}"
+            echo
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 文件 | \`$(basename "$IMG")\` |"
+            echo "| 大小 | $(stat -c%s "$IMG") B (${MB} MiB) |"
+            echo "| MD5 | \`$(md5sum "$IMG" | cut -d' ' -f1)\` |"
+            echo "| SHA256 | \`$(sha256sum "$IMG" | cut -d' ' -f1)\` |"
+            echo "| 提交 | \`${{ github.sha }}\` |"
+            echo "| lunch | \`${{ inputs.lunch_target }}\` |"
+            echo "| manifest | \`${{ inputs.manifest_url }}\` @ \`${{ inputs.manifest_branch }}\` |"
+            echo "| 构建时间 (UTC) | ${{ steps.meta.outputs.ts }} |"
+            echo
+            echo "### 结构"
+            echo "vendor_boot v4 两片：platform(type=1，官方 6.1.138 模块) + recovery(type=2，本树 OrangeFox/TWRP ramdisk)，"
+            echo "镜像总大小 67,108,864 B (64 MiB)。"
+            echo
+            echo "### 刷入"
+            echo '```'
+            echo "adb reboot bootloader"
+            echo "fastboot flash vendor_boot $(basename "$IMG")"
+            echo "fastboot reboot recovery"
+            echo '```'
+            echo
+            echo "刷之前先备份官方原片 vendor_boot.img（TB375FC_ZUX_1.1.04.287_Tool/image 下，"
+            echo "vrs 26,902,388，md5 E60D9F853E08CDE9D099EA1143D760F8），用于回滚。"
+            echo
+            echo "### 注意"
+            echo "- 本包未做实机验证，第一次刷入请准备好官方原片回滚。"
+            echo "- 如果刷完能进 recovery 但重启又回系统，先排查 AVB footer。"
+          } > release_notes.md
+          cat release_notes.md
+
+      - name: Publish release
+        # 编译出来的 img 直接挂到 Releases，免得每次去 Actions 里点 artifact 包。
+        if: steps.relnotes.outputs.has_img == 'true'
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: twrp-tb375fc-${{ steps.meta.outputs.ts }}
+          name: TWRP 4.0 TB375FC ${{ steps.meta.outputs.ts }}
+          body_path: workspace/release_notes.md
+          prerelease: true
+          fail_on_unmatched_files: false
+          files: |
+            workspace/artifacts/*.img
+            workspace/artifacts/*.build_info.txt
