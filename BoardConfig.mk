@@ -87,8 +87,21 @@ BOARD_KERNEL_CMDLINE := bootopt=64S3,32N2,64N2
 AB_OTA_UPDATER := true
 AB_OTA_PARTITIONS := boot init_boot vendor_boot dtbo vbmeta vbmeta_system vbmeta_vendor
 
-# Verified boot — we only replace vendor_boot, never vbmeta
+# Verified boot: the stock vendor_boot is an AVB-signed image, so the replacement is
+# signed too (AOSP test key) and padded to the 64 MiB partition.
+# build/make defines NO per-partition AVB key defaults: INTERNAL_AVB_VENDOR_BOOT_
+# SIGNING_ARGS only exists after _check-and-set-avb-chain-args runs, which requires
+# BOARD_AVB_VENDOR_BOOT_KEY_PATH and then hard-$(error)s unless _ALGORITHM,
+# _ROLLBACK_INDEX and _ROLLBACK_INDEX_LOCATION are also defined (core/Makefile:4769).
+# With them unset, avbtool add_hash_footer would run with no --algorithm/--key.
 BOARD_AVB_ENABLE := true
+BOARD_AVB_ALGORITHM := SHA256_RSA2048
+BOARD_AVB_KEY_PATH := external/avb/test/data/testkey_rsa2048.pem
+BOARD_AVB_VENDOR_BOOT_KEY_PATH := $(BOARD_AVB_KEY_PATH)
+BOARD_AVB_VENDOR_BOOT_ALGORITHM := $(BOARD_AVB_ALGORITHM)
+BOARD_AVB_VENDOR_BOOT_ROLLBACK_INDEX := 0
+BOARD_AVB_VENDOR_BOOT_ROLLBACK_INDEX_LOCATION := 1
+BOARD_AVB_VENDOR_BOOTIMAGE_KEY_PATH := $(BOARD_AVB_KEY_PATH)
 
 # Partitions
 BOARD_PROPERTY_OVERRIDES_SPLIT_ENABLED := true
