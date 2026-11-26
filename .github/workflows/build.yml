@@ -194,6 +194,11 @@ jobs:
             exit $LUNCH_RC
           fi
           echo "== TARGET_DEVICE=$TARGET_DEVICE =="
+          # TARGET_NO_KERNEL=true means AOSP only creates $OUT/root as a side effect
+          # of the boot ramdisk rule; anything that rsyncs from $OUT/root earlier
+          # dies with "link_stat .../root failed: No such file or directory".
+          # Pre-create the staging dirs so the ordering is deterministic.
+          mkdir -p "$OUT/root" "$OUT/vendor_ramdisk"
           # Run #5: lunch finally parsed, then the job was killed 5 min into mka
           # with exit 143 ("runner has received a shutdown signal") and not a
           # single line of compiler output survived (build.log was redirected to
