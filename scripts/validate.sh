@@ -18,15 +18,26 @@ for f in BoardConfig.mk device.mk twrp_tb375fc.mk AndroidProducts.mk Android.mk 
 done
 
 sec "2. recovery ramdisk layout"
-for f in recovery/root/init.recovery.mt8792.rc recovery/root/system/etc/recovery.fstab prebuilt/dtb; do
+for f in recovery/root/init.recovery.mt8792.rc recovery/root/init.recovery.microtrust.rc \
+         recovery/root/system/etc/recovery.fstab recovery/root/system/etc/twrp.flags \
+         recovery/root/system/bin/tb373fu_usb_storage.sh \
+         prebuilt/dtb prebuilt/platform_ramdisk.lz4 scripts/splice_platform.py; do
   [ -f "$ROOT/$f" ] && ok "$f" || bad "$f missing"
 done
+if [ -d "$ROOT/recovery/root/vendor" ]; then
+  vc=$(find "$ROOT/recovery/root/vendor" -type f | wc -l)
+  [ "$vc" -ge 40 ] && ok "recovery/root/vendor has $vc files (teei/keymint/TA/firmware)" || bad "recovery/root/vendor only $vc files"
+else
+  bad "recovery/root/vendor missing (decryption + touch firmware live there)"
+fi
 
 sec "3. rc must be mt8792 (device reports ro.boot.hardware=mt8792)"
 if ls "$ROOT"/recovery/root/init.recovery.*.rc >/dev/null 2>&1; then
   for rc in "$ROOT"/recovery/root/init.recovery.*.rc; do
     case "$(basename "$rc")" in
       init.recovery.mt8792.rc) ok "rc name matches hardware" ;;
+      # 官方 recovery ramdisk 里确实还有这一份 microtrust rc（TEE），照抄不改名
+      init.recovery.microtrust.rc) ok "rc from the stock ramdisk (microtrust/TEE)" ;;
       *) bad "rc name $(basename "$rc") does not match mt8792" ;;
     esac
   done
@@ -42,13 +53,42 @@ grep -qE '^[[:space:]]*TARGET_BOOTLOADER_BOARD_NAME[[:space:]]*:?=[[:space:]]*mt
 chk BOARD_BOOT_HEADER_VERSION 4
 chk BOARD_KERNEL_PAGESIZE 4096
 chk BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE 67108864
-chk BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT true
+# 2026-11-26：两片结构才进得了 recovery（device 上唯一验证过的形状）。
+# 单流方案（MOVE=true + TARGET_NO_RECOVERY=true）编出来的 platform 片只有 4 B、
+# recovery 片退化成 AOSP recovery，实刷全部失败。
 if grep -qE '^[[:space:]]*BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT[[:space:]]*:?=[[:space:]]*true' "$bc"; then
-  bad "BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT must be off (two lz4 fragments = double magic in vendor_ramdisk)"
+  ok "BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT = true (two fragments)"
 else
-  ok "single vendor_ramdisk (recovery root packed directly, one lz4 stream)"
+  bad "BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT must be true (two-fragment vendor_boot)"
 fi
-chk TARGET_NO_RECOVERY true
+if grep -qE '^[[:space:]]*BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT[[:space:]]*:?=[[:space:]]*true' "$bc"; then
+  bad "BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT must be off (it empties the platform fragment)"
+else
+  ok "BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT off"
+fi
+if grep -qE '^[[:space:]]*TARGET_NO_RECOVERY[[:space:]]*:?=[[:space:]]*true' "$bc"; then
+  bad "TARGET_NO_RECOVERY must be off (it drops the recovery fragment entirely)"
+else
+  ok "TARGET_NO_RECOVERY off"
+fi
+if grep -qE '^[[:space:]]*BOARD_PREBUILT_PLATFORM_RAMDISK[[:space:]]*:?=' "$bc"; then
+  ok "BOARD_PREBUILT_PLATFORM_RAMDISK declared"
+  plat="$ROOT/prebuilt/platform_ramdisk.lz4"
+  if [ -f "$plat" ]; then
+    psz=$(stat -c%s "$plat" 2>/dev/null || echo 0)
+    [ "$psz" = "25863198" ] && ok "platform_ramdisk.lz4 = 25,863,198 B (stock fragment)" \
+      || bad "platform_ramdisk.lz4 = $psz B, expected 25,863,198"
+  else
+    bad "prebuilt/platform_ramdisk.lz4 missing"
+  fi
+else
+  bad "BOARD_PREBUILT_PLATFORM_RAMDISK missing"
+fi
+if grep -q 'splice_platform.py' "$ROOT/.github/workflows/build.yml" 2>/dev/null; then
+  ok "build.yml splices the platform fragment"
+else
+  bad "build.yml does not call scripts/splice_platform.py (product would not boot recovery)"
+fi
 grep -qE '^[[:space:]]*TARGET_NO_KERNEL[[:space:]]*:?=[[:space:]]*true' "$bc" && ok "TARGET_NO_KERNEL = true (vendor_boot carries no kernel segment)" || bad "TARGET_NO_KERNEL must be true"
 if grep -qE '^[[:space:]]*TARGET_PREBUILT_KERNEL[[:space:]]*:?=' "$bc"; then bad "TARGET_PREBUILT_KERNEL must not be set (manifest prebuilts path is absent)"; else ok "no TARGET_PREBUILT_KERNEL"; fi
 if grep -qE '^[[:space:]]*BOARD_PREBUILT_DTBIMAGE_DIR[[:space:]]*:?=' "$bc"; then
@@ -88,7 +128,13 @@ fs="$ROOT/recovery/root/system/etc/recovery.fstab"
 if [ -f "$fs" ]; then
   grep -q '/data' "$fs" && ok "/data entry present" || bad "/data missing from fstab"
   grep -q '/metadata' "$fs" && ok "/metadata entry present" || bad "/metadata missing (FBE metadata decrypt needs it)"
-  grep -q '/mnt/vendor/persist' "$fs" && ok "persist mounted at /mnt/vendor/persist" || warn "persist not mounted"
+  if grep -q '/mnt/vendor/persist' "$fs"; then
+    ok "persist mounted at /mnt/vendor/persist"
+  elif grep -qE '^/persist_image[[:space:]]' "$ROOT/recovery/root/system/etc/twrp.flags" 2>/dev/null; then
+    ok "persist exposed via twrp.flags as /persist_image (stock recovery fstab has no /persist mount)"
+  else
+    warn "persist neither mounted nor exposed"
+  fi
   grep -q 'by-name/system ' "$fs" && bad "by-name/system is logical-only on this device — must not be mounted by name" || ok "no by-name/system mount"
   grep -q 'by-name/vendor ' "$fs" && bad "by-name/vendor is logical-only — must not be mounted by name" || ok "no by-name/vendor mount"
   grep -q 'dm-userdata' "$fs" && warn "duplicate dm-userdata /data line present (harmless but noisy)" || ok "no duplicate dm-userdata line"
@@ -98,12 +144,17 @@ else
   bad "fstab missing"
 fi
 
-sec "9. modules"
-ko=$(find "$ROOT/recovery/root/lib/modules" -name '*.ko' 2>/dev/null | wc -l)
-if [ "$ko" -ge 100 ]; then ok "$ko vendor modules staged"; else bad "only $ko modules staged (expected ~222)"; fi
-if command -v file >/dev/null 2>&1 && [ "$ko" -gt 0 ]; then
-  one=$(find "$ROOT/recovery/root/lib/modules" -name '*.ko' | head -1)
-  file "$one" | grep -q 'ARM aarch64' && ok "module arch is aarch64" || warn "module arch not recognised"
+sec "9. modules live in the platform fragment, not in the recovery ramdisk"
+plat="$ROOT/prebuilt/platform_ramdisk.lz4"
+if [ -f "$plat" ]; then
+  ok "platform fragment present (222 stock .ko, vermagic 6.1.138-android14-11-g56ef1ebb4dca)"
+else
+  bad "platform fragment missing -> no modules at all"
+fi
+if [ -d "$ROOT/recovery/root/lib/modules" ] && [ -n "$(ls -A "$ROOT/recovery/root/lib/modules" 2>/dev/null)" ]; then
+  bad "recovery/root/lib/modules must stay empty: modules are provided by the platform fragment"
+else
+  ok "no duplicated modules inside the recovery root"
 fi
 
 sec "10. dtb"
@@ -122,8 +173,34 @@ if [ -f "$wf" ]; then
   grep -q 'TWRP-Test/platform_manifest_twrp_aosp' "$wf" && ok "uses TWRP-Test minimal manifest" || warn "manifest url differs from the reference"
   grep -q 'twrp-16.0' "$wf" && ok "twrp-16.0 branch" || warn "branch not twrp-16.0"
   grep -q 'date -u +%Y%m%d-%H%M%S' "$wf" && ok "timestamped artifact naming" || warn "no timestamp"
+  grep -q 'mka -j2 vendorbootimage' "$wf" && ok "workflow builds vendorbootimage" || bad "workflow never runs vendorbootimage"
+  grep -q 'vendor_boot_TWRP_64MB.img' "$wf" && ok "workflow collects the spliced image" || bad "spliced image not collected"
 else
   bad "build.yml missing"
+fi
+
+sec "12. twrp.flags (partition manager targets)"
+tf="$ROOT/recovery/root/system/etc/twrp.flags"
+if [ -f "$tf" ]; then
+  for p in '/vendor_boot' '/boot' '/init_boot' '/dtbo' '/vbmeta' '/persist_image' '/usb_otg' '/external_sd'; do
+    grep -qE "^[[:space:]]*$p[[:space:]]" "$tf" && ok "twrp.flags has $p" || bad "twrp.flags missing $p"
+  done
+  grep -qE '^/vendor_boot[[:space:]].*flashimg=1' "$tf" && ok "/vendor_boot flashable" || bad "/vendor_boot not flashable"
+else
+  bad "twrp.flags missing"
+fi
+
+sec "13. 64 MiB budget"
+if [ -f "$plat" ]; then
+  psz=$(stat -c%s "$plat" 2>/dev/null || echo 0)
+  # 可用包实测：platform 25,863,198 + recovery 30,573,748 = vrs 56,436,946 B
+  est=$(( psz + 30573748 ))
+  lim=67108864
+  if [ "$est" -lt "$lim" ]; then
+    ok "estimated vrs $est B < $lim B (head-room $((lim - est)) B)"
+  else
+    bad "estimated vrs $est B >= $lim B"
+  fi
 fi
 
 printf '\n== summary: FAIL=%d WARN=%d ==\n' "$FAIL" "$WARN"

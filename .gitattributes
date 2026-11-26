@@ -9,3 +9,9 @@
 *.fstab text eol=lf
 *.ko binary
 prebuilt/dtb binary
+*.img binary
+*.lz4 binary
+*.ta binary
+*.bin binary
+*.dtb binary
+*.zip binary

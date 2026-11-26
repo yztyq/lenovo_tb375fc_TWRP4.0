@@ -73,16 +73,21 @@ BOARD_INCLUDE_DTB_IN_BOOTIMG := true
 
 # vendor_boot as recovery (no recovery partition on this tablet)
 BOARD_USES_GENERIC_KERNEL_IMAGE := true
-BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
-# A two-fragment vendor_ramdisk is poison here. With the INCLUDE flag on, AOSP packs
-# an (empty) platform "vendor_ramdisk" lz4 frame plus a recovery.cpio lz4 frame, so
-# the image's vendor_ramdisk starts with two 02 21 4c 18 magics back to back and a
-# single-stream legacy lz4 decompressor (bootloader / init) chokes on it.
-# Leaving the flag off makes core/Makefile:1620-1628 run mkbootfs over the recovery
-# root straight into the vendor ramdisk: one lz4 stream, the same shape as stock.
-# BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
-TARGET_NO_RECOVERY := true
+# 2026-11-26 实测（按 device 上真正进得了 recovery 的那个包反推）：vendor_boot 必须
+# 是「两片」—— type=1 platform（官方原片，含 222 个 .ko）+ type=2 recovery（TWRP
+# 根文件系统）。bootloader 靠分片表里的 type 位选片，两片并列是合法结构，实测可用。
+#
+# 反过来，MOVE + TARGET_NO_RECOVERY 的组合会把 TWRP 资源（twres/FFiles/sbin）赶进
+# $OUT/vendor_ramdisk，而 TARGET_NO_KERNEL 下该目录不存在（mkbootfs: cannot open
+# directory），结果 platform 分片只剩 4 字节、recovery 分片退化成 AOSP recovery，
+# 刷进去必定进不了 recovery。
+# BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
+BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
+# TARGET_NO_RECOVERY := true
 BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE := 67108864
+# 官方 platform 分片（first_stage_ramdisk + lib/modules，25,863,198 B）。本树编不出
+# 这一片，由 scripts/splice_platform.py 在打包时拼回去。
+BOARD_PREBUILT_PLATFORM_RAMDISK := $(DEVICE_PATH)/prebuilt/platform_ramdisk.lz4
 # AOSP16 has no BOARD_VENDOR_CMDLINE: board_config.mk:317 sets
 # INTERNAL_KERNEL_CMDLINE := $(BOARD_KERNEL_CMDLINE) and core/Makefile:1668
 # passes it as --vendor_cmdline to mkbootimg for vendor_boot. The stock vendor_boot
@@ -206,11 +211,13 @@ TW_DEFAULT_LANGUAGE := zh_CN
 TW_EXTRA_LANGUAGES := true
 TW_USE_TOOLBOX := true
 TW_USE_SERIALNO_PROPERTY_FOR_DEVICE_ID := true
-# Modules: the recovery ramdisk ships 222 .ko plus modules.load.recovery
-# (212 entries, including nt36532.ko and the panel-alpha-* drivers), so init
-# loads them from the list. Do NOT name individual modules here — earlier a
-# nonexistent mtk_tinysys_scp.ko was referenced and init logged "service not
-# found" on every boot.
+# Modules: recovery/root 里不再放 222 个 .ko —— 它们由 platform 分片
+# (prebuilt/platform_ramdisk.lz4) 提供，文件名/大小/vermagic
+# 6.1.138-android14-11-g56ef1ebb4dca 与可用包逐一对齐，init 从那里的
+# modules.load / modules.load.recovery 加载。放进 recovery 分片会把该片从 ~30 MB
+# 撑到 ~45 MB，64 MiB 装不下 platform + recovery 两片。
+# 也仍然不要在这里点名单个模块 —— 早先引用过不存在的 mtk_tinysys_scp.ko，
+# 每次启动 init 都报 "service not found"。
 
 # COPY
 TARGET_COPY_OUT_VENDOR := vendor
