@@ -91,9 +91,8 @@ jobs:
             zip unzip curl wget rsync libc6-dev-i386 lib32ncurses5-dev x11proto-core-dev \
             libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc fontconfig lz4 \
             python3 python-is-python3 python3-pip ccache
-          # scripts/splice_platform.py 需要 lz4（recovery 分片重编码成 lz4 legacy，MTK LK 只认 lz4）
-            # zstandard 只用来解码旧包里的 0000+zstd 零件
-          python3 -m pip install --user lz4 zstandard
+          # scripts/splice_platform.py 需要 zstandard（把 recovery 分片重编码成 0000+zstd）
+          python3 -m pip install --user zstandard
 
       - name: Setup ccache
         uses: hendrikmuhs/ccache-action@v1
@@ -163,6 +162,22 @@ jobs:
           # vendor_boot has no kernel segment (proved by the stock v4 header);
           # the kernel comes from the stock boot.img, so absent prebuilts are fine.
           ls -l kernel/prebuilts/6.1/arm64/ 2>/dev/null || echo "kernel/prebuilts/6.1/arm64 absent - not needed (TARGET_NO_KERNEL=true)"
+
+      - name: Patch TWRP DRM backend for MediaTek
+        # 实机日志：TWRP DRM: display 0 found 0/2 primary planes for CRTC index 0
+        # -> Failed to init display -> gui2: minui display initialization failed
+        # -> E:GUI2 exited with error 1.，recovery 反复重启后掉 bootloader。
+        # 本机没有 fbdev 后备（recovery 里 /dev/graphics、/proc/fb 都不存在），
+        # 只能让 mediatek-drm 走 legacy KMS（drmModeSetCrtc + dumb buffer）。
+        env:
+          DEVICE_PATH: ${{ inputs.device_path }}
+        run: |
+          set -eo pipefail
+          cd workspace
+          F=bootable/recovery/twrpminui/graphics_drm.cpp
+          test -f "$F" || { echo "missing $F"; exit 4; }
+          python3 "device/$DEVICE_PATH/scripts/patch_drm_legacy.py" "$F"
+          grep -n 'legacy_modeset = version->name' -A4 "$F"
 
       - name: Build
         id: build
