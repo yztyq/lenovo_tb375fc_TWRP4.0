@@ -43,7 +43,11 @@ chk BOARD_BOOT_HEADER_VERSION 4
 chk BOARD_KERNEL_PAGESIZE 4096
 chk BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE 67108864
 chk BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT true
-chk BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT true
+if grep -qE '^[[:space:]]*BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT[[:space:]]*:?=[[:space:]]*true' "$bc"; then
+  bad "BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT must be off (two lz4 fragments = double magic in vendor_ramdisk)"
+else
+  ok "single vendor_ramdisk (recovery root packed directly, one lz4 stream)"
+fi
 chk TARGET_NO_RECOVERY true
 grep -qE '^[[:space:]]*TARGET_NO_KERNEL[[:space:]]*:?=[[:space:]]*true' "$bc" && ok "TARGET_NO_KERNEL = true (vendor_boot carries no kernel segment)" || bad "TARGET_NO_KERNEL must be true"
 if grep -qE '^[[:space:]]*TARGET_PREBUILT_KERNEL[[:space:]]*:?=' "$bc"; then bad "TARGET_PREBUILT_KERNEL must not be set (manifest prebuilts path is absent)"; else ok "no TARGET_PREBUILT_KERNEL"; fi
