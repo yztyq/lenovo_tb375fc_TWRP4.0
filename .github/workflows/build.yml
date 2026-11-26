@@ -205,8 +205,11 @@ jobs:
           # kernel messages from the trap so the next kill proves or rules out OOM.
           trap 'cp /tmp/build.log artifacts/build.log 2>/dev/null || true; echo "== trapped TERM/INT =="; free -h || true; df -h / || true; (dmesg 2>/dev/null || sudo dmesg 2>/dev/null) | tail -80 || true; exit 143' TERM INT
           set -o pipefail
-          # -j2 instead of -j4: halve the peak memory of the ninja fan-out.
-          mka -j2 "${BUILD_PARTITION}image" 2>&1 | tee /tmp/build.log
+          # Run #10 got all the way to ninja after 51 min and then failed with
+          #   FAILED: ninja: unknown target 'vendor_bootimage', did you mean 'vendorbootimage'?
+          # The AOSP target has no underscore; "${BUILD_PARTITION}image" was wrong.
+          # -j2 instead of -j4 keeps the ninja fan-out memory low.
+          mka -j2 vendorbootimage 2>&1 | tee /tmp/build.log
           BUILD_RC=${PIPESTATUS[0]}
           trap - TERM INT
           echo "== build rc=$BUILD_RC at $(date -u) =="
