@@ -18,7 +18,7 @@ on:
       lunch_target:
         description: 'Lunch target'
         required: false
-        default: 'twrp_tb375fc-eng'
+        default: 'twrp_tb375fc-aosp_current-eng'
       build_partition:
         description: 'Partition to build (this tablet has no recovery partition)'
         required: false
@@ -165,11 +165,11 @@ jobs:
         run: |
           set -x
           cd workspace
-          # Run #7/#8 pinned it down: dmesg shows soong_build killed at 14.2 GB
-          # anon-rss while RAM (15 GB) and the whole 9 GB swap were consumed.
-          # Use the light `twrp_tb375fc-eng` product instead of the aosp_current
-          # variant (which pulls the entire AOSP module set into the bp parse),
-          # and still bound the Go heap in case it is not enough.
+          # Run #8 pinned it down: dmesg shows soong_build killed at 14.2 GB
+          # anon-rss with RAM (15 GB) and the entire 9 GB swap consumed. The
+          # lighter two-segment combo `twrp_tb375fc-eng` is rejected by AOSP 16
+          # ("Invalid lunch combo"), so the bp-parse set cannot be shrunk that
+          # way; instead give the box 20 GB of swap below and bound the Go heap.
           # Run #7 pinned it down: the TERM trap's dmesg shows
           #   oom-kill ... task_memcg=/system.slice/hosted-compute-agent.service
           #   Out of memory: Killed process 18243 (soong_build) anon-rss:14068048kB
