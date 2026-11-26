@@ -77,7 +77,11 @@ BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
 BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
 TARGET_NO_RECOVERY := true
 BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE := 67108864
-BOARD_VENDOR_CMDLINE := bootopt=64S3,32N2,64N2
+# AOSP16 has no BOARD_VENDOR_CMDLINE: board_config.mk:317 sets
+# INTERNAL_KERNEL_CMDLINE := $(BOARD_KERNEL_CMDLINE) and core/Makefile:1668
+# passes it as --vendor_cmdline to mkbootimg for vendor_boot. The stock vendor_boot
+# header stores exactly this string (read from the image, cmdline[2048] at offset 28).
+BOARD_KERNEL_CMDLINE := bootopt=64S3,32N2,64N2
 
 # A/B
 AB_OTA_UPDATER := true
