@@ -122,6 +122,34 @@ def encode_ramdisk(cpio):
     return b'\x00\x00\x00\x00' + zstandard.ZstdCompressor(level=19).compress(cpio), '0000+zstd'
 
 
+def cpio_names(cpio):
+    """逐个吐出 newc cpio 里的条目名（注意不能用 bytes in cpio 判断，
+    脚本/配置里也会出现 system/bin/recovery 这种字面串）。"""
+    i = 0
+    while cpio[i:i + 6] in (b'070701', b'070702'):
+        namesz = int(cpio[i + 94:i + 102], 16)
+        filesz = int(cpio[i + 54:i + 62], 16)
+        name = cpio[i + 110:i + 110 + namesz - 1].decode('utf-8', 'replace')
+        if name == 'TRAILER!!!':
+            return
+        yield name
+        i = (i + 110 + namesz + 3)//4*4 + (filesz + 3)//4*4
+
+
+def count_cpio(cpio):
+    """数一下 newc cpio 里的条目，用来判断 recovery 根是不是"壳"。"""
+    return sum(1 for _ in cpio_names(cpio))
+
+
+def is_bootable_root(cpio):
+    """recovery 根必须带真正的 recovery 可执行文件，否则内核起不来 recovery。
+    MOVE 模式下的"壳"分片（run#17，764 个条目）就是缺这个。"""
+    for n in cpio_names(cpio):
+        if n.lstrip('./') in ('system/bin/recovery', 'sbin/recovery'):
+            return True
+    return False
+
+
 # ---------------------------------------------------------------- 解析 vendor_boot v4
 def parse_vendor_boot(path):
     """vendor_boot v4 布局（MTK/lineage mkbootimg 实测）：
@@ -179,8 +207,12 @@ def build_image(header, platform, recovery, dtb, out_size, out_path):
     # 分片表：与可用包一致，条目从 page 起始处直接排列
     table = bytearray(PAGE)
     # type 1 = platform, type 2 = recovery（可用包里就是这么写的，写错 bootloader 不认）
-    for i, (off, size, typ) in enumerate([(0, len(platform), 1), (len(platform), len(recovery), 2)]):
+    # +12..+28 是 board_id 字段，可用包在 recovery 条目里塞了名字 "recovery"，
+    # 字节级对齐它（md5 才能和已验证包一致）。
+    for i, (off, size, typ, name) in enumerate([(0, len(platform), 1, b''),
+                                                (len(platform), len(recovery), 2, b'recovery')]):
         struct.pack_into('<III', table, i * entry_size, size, off, typ)
+        table[i * entry_size + 12:i * entry_size + 12 + len(name)] = name
     blob += table
 
     if out_size and len(blob) < out_size:
@@ -206,10 +238,18 @@ def main():
     ap.add_argument('--recovery-cpio', dest='recovery_cpio', default=None)
     ap.add_argument('--dtb', dest='dtb', default=None)
     ap.add_argument('--header', dest='header', default=None)
+    # 编出来的 recovery 分片可能只是个"壳"：MOVE 模式下 AOSP 只把 recovery 的
+    # 上下文文件装进 recovery/root，真正的 system/bin/recovery、lib/、linker64、
+    # file_contexts 这些要等 twrp_ramdisk / recovery 模块做完才进得去。
+    # run#17（2026-11-26）实测只有 764 个文件、缺 system/bin/recovery，刷进去
+    # 进不了 recovery。所以这里允许给一份已验证可启动的分片做兜底。
+    ap.add_argument('--fallback-cpio', dest='fallback_cpio', default=None)
     a = ap.parse_args()
 
     if not os.path.exists(a.platform):
         sys.exit('[!] 缺官方 platform 分片: %s' % a.platform)
+
+    rec_z_fixed = None
 
     if a.recovery_cpio:
         for need, val in (('recovery cpio', a.recovery_cpio), ('dtb', a.dtb), ('header', a.header)):
@@ -261,8 +301,26 @@ def main():
     if not any(x in rec for x in (b'twres/', b'FFiles/', b'system/bin/twrp', b'tb373fu')):
         sys.exit('[!] recovery 分片里没有 twres/FFiles，说明 OF 资源没进 ramdisk，先检查 BoardConfig')
 
+    # 编出来的分片若只是个"壳"（缺 system/bin/recovery），就换成兜底分片。
+    print('[i] 待用 recovery 分片：%s B / %d 个 cpio 条目 / system/bin/recovery=%s'
+          % (format(len(rec), ','), count_cpio(rec), is_bootable_root(rec)))
+    if not is_bootable_root(rec):
+        if not a.fallback_cpio or not os.path.exists(a.fallback_cpio):
+            sys.exit('[!] recovery 分片缺 system/bin/recovery，也没有 --fallback-cpio 可用，'
+                     '这个包刷进去进不了 recovery')
+        fb_raw = open(a.fallback_cpio, 'rb').read()
+        fb, fb_codec = decode_ramdisk(fb_raw)
+        if not is_bootable_root(fb):
+            sys.exit('[!] 兜底分片也不完整: %s' % a.fallback_cpio)
+        print('[!] 编出来的分片不完整，改用已验证可启动的那份：%s（%s B / %s / %d 条目）'
+              % (a.fallback_cpio, format(len(fb_raw), ','), fb_codec, count_cpio(fb)))
+        rec, codec = fb, fb_codec
+        if fb_codec == '0000+zstd':
+            # 就是可用包里的原始字节，直接原样嵌入，不重新压缩
+            rec_z_fixed = fb_raw
+
     plat = open(a.platform, 'rb').read()
-    rec_z, codec = encode_ramdisk(rec)
+    rec_z, codec = encode_ramdisk(rec) if not rec_z_fixed else (rec_z_fixed, '0000+zstd(原样)')
     if dtb_size and len(dtb) != dtb_size:
         print('[!] dtb 实际 %s B，头和 BOARD_DTB_SIZE 都写的是 %s B' %
               (format(len(dtb), ','), format(dtb_size, ',')))

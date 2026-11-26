@@ -286,6 +286,14 @@ jobs:
             exit 0
           fi
           ls -l "$OUT/vendor_boot_TWRP_64MB.img"
+          md5sum "$OUT/vendor_boot_TWRP_64MB.img"
+          # 分片表里 recovery 条目要带 board_id="recovery"（可用包就是这么写的），
+          # 脚本里已经处理；这里把 vrs 打出来，方便和 56,436,946 B 的基准对照。
+          python3 - <<'PY'
+import struct
+b = open("out/target/product/tb375fc/vendor_boot_TWRP_64MB.img","rb").read()
+print("vrs = %s B" % format(struct.unpack_from("<I", b, 24)[0], ","))
+PY
 
       - name: Collect artifact
         if: always()
