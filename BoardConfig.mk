@@ -73,21 +73,27 @@ BOARD_INCLUDE_DTB_IN_BOOTIMG := true
 
 # vendor_boot as recovery (no recovery partition on this tablet)
 BOARD_USES_GENERIC_KERNEL_IMAGE := true
-# 2026-11-26 实测（按 device 上真正进得了 recovery 的那个包反推）：vendor_boot 必须
-# 是「两片」—— type=1 platform（官方原片，含 222 个 .ko）+ type=2 recovery（TWRP
-# 根文件系统）。bootloader 靠分片表里的 type 位选片，两片并列是合法结构，实测可用。
-#
-# 反过来，MOVE + TARGET_NO_RECOVERY 的组合会把 TWRP 资源（twres/FFiles/sbin）赶进
-# $OUT/vendor_ramdisk，而 TARGET_NO_KERNEL 下该目录不存在（mkbootfs: cannot open
-# directory），结果 platform 分片只剩 4 字节、recovery 分片退化成 AOSP recovery，
-# 刷进去必定进不了 recovery。
-# BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
+# 两片结构在 AOSP 16 里只有一种合法组合：MOVE + INCLUDE 同时为 true。
+#   build/make/core/board_config.mk:1069-1074 硬校验：INCLUDE=true 而 MOVE 不为 true
+#   时 lunch/dumpvars 直接 $(error)
+#     "Should not set BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT if
+#      BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT is not set"
+#   （2026-11-26 ofox16 的 CI 就死在这一行，run 45793799376）
+# 真实语义：
+#   MOVE=true    -> board_config.mk 的 MOVE 分支优先，BUILDING_RECOVERY_IMAGE=true：
+#                   只编 recovery 资源（TARGET_RECOVERY_ROOT_OUT），不产 recovery.img
+#                   （core/Makefile:283-296）
+#   INCLUDE=true -> core/Makefile:345-355 把 TARGET_RECOVERY_ROOT_OUT 注册成独立分片，
+#                   MKBOOTIMG_ARGS += --ramdisk_type RECOVERY，即 type=2 片
+#   两者都 true 时 core/Makefile:1620-1625 不再把 recovery 资源并进默认 vendor ramdisk
+#   —— 单流（MOVE 开、INCLUDE 关）当年就是这么把 platform 片挤成 4 字节的。
+# platform 片仍取官方原片（first_stage_ramdisk + 222 个 6.1.138 .ko），由
+# scripts/splice_platform.py 替换第 0 片。AOSP 没有 BOARD_PREBUILT_PLATFORM_RAMDISK
+# 这个变量（只有 BOARD_VENDOR_RAMDISK_FRAGMENT.<name>.PREBUILT），写了也是空转。
+BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
 BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
-# TARGET_NO_RECOVERY := true
+# TARGET_NO_RECOVERY := true   # 不要打开：MOVE 已保证不产 recovery.img
 BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE := 67108864
-# 官方 platform 分片（first_stage_ramdisk + lib/modules，25,863,198 B）。本树编不出
-# 这一片，由 scripts/splice_platform.py 在打包时拼回去。
-BOARD_PREBUILT_PLATFORM_RAMDISK := $(DEVICE_PATH)/prebuilt/platform_ramdisk.lz4
 # AOSP16 has no BOARD_VENDOR_CMDLINE: board_config.mk:317 sets
 # INTERNAL_KERNEL_CMDLINE := $(BOARD_KERNEL_CMDLINE) and core/Makefile:1668
 # passes it as --vendor_cmdline to mkbootimg for vendor_boot. The stock vendor_boot

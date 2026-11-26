@@ -54,35 +54,39 @@ chk BOARD_BOOT_HEADER_VERSION 4
 chk BOARD_KERNEL_PAGESIZE 4096
 chk BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE 67108864
 # 2026-11-26：两片结构才进得了 recovery（device 上唯一验证过的形状）。
-# 单流方案（MOVE=true + TARGET_NO_RECOVERY=true）编出来的 platform 片只有 4 B、
-# recovery 片退化成 AOSP recovery，实刷全部失败。
+# AOSP 16 只接受 MOVE + INCLUDE 同时为 true：只开 INCLUDE 会在 lunch 阶段被
+# board_config.mk:1069-1074 直接 $(error)（ofox16 CI run 45793799376 就是这么死的）；
+# 只开 MOVE 则是单流（platform 片被挤成 4 B、recovery 退化成 AOSP recovery）。
 if grep -qE '^[[:space:]]*BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT[[:space:]]*:?=[[:space:]]*true' "$bc"; then
   ok "BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT = true (two fragments)"
 else
   bad "BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT must be true (two-fragment vendor_boot)"
 fi
 if grep -qE '^[[:space:]]*BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT[[:space:]]*:?=[[:space:]]*true' "$bc"; then
-  bad "BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT must be off (it empties the platform fragment)"
+  ok "BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT = true (required by INCLUDE)"
 else
-  ok "BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT off"
+  bad "BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT must be true, board_config.mk rejects INCLUDE without it"
 fi
 if grep -qE '^[[:space:]]*TARGET_NO_RECOVERY[[:space:]]*:?=[[:space:]]*true' "$bc"; then
   bad "TARGET_NO_RECOVERY must be off (it drops the recovery fragment entirely)"
 else
   ok "TARGET_NO_RECOVERY off"
 fi
+# AOSP 没有 BOARD_PREBUILT_PLATFORM_RAMDISK 这个变量（只有
+# BOARD_VENDOR_RAMDISK_FRAGMENT.<name>.PREBUILT）；写了也是空转，platform 片由
+# splice 脚本替换，所以只校验 prebuilt 文件本身在不在。
 if grep -qE '^[[:space:]]*BOARD_PREBUILT_PLATFORM_RAMDISK[[:space:]]*:?=' "$bc"; then
-  ok "BOARD_PREBUILT_PLATFORM_RAMDISK declared"
-  plat="$ROOT/prebuilt/platform_ramdisk.lz4"
-  if [ -f "$plat" ]; then
-    psz=$(stat -c%s "$plat" 2>/dev/null || echo 0)
-    [ "$psz" = "25863198" ] && ok "platform_ramdisk.lz4 = 25,863,198 B (stock fragment)" \
-      || bad "platform_ramdisk.lz4 = $psz B, expected 25,863,198"
-  else
-    bad "prebuilt/platform_ramdisk.lz4 missing"
-  fi
+  bad "BOARD_PREBUILT_PLATFORM_RAMDISK is not an AOSP variable - remove it (splice script does the platform fragment)"
 else
-  bad "BOARD_PREBUILT_PLATFORM_RAMDISK missing"
+  ok "no bogus BOARD_PREBUILT_PLATFORM_RAMDISK"
+fi
+plat="$ROOT/prebuilt/platform_ramdisk.lz4"
+if [ -f "$plat" ]; then
+  psz=$(stat -c%s "$plat" 2>/dev/null || echo 0)
+  [ "$psz" = "25863198" ] && ok "platform_ramdisk.lz4 = 25,863,198 B (stock fragment)" \
+    || bad "platform_ramdisk.lz4 = $psz B, expected 25,863,198"
+else
+  bad "prebuilt/platform_ramdisk.lz4 missing"
 fi
 if grep -q 'splice_platform.py' "$ROOT/.github/workflows/build.yml" 2>/dev/null; then
   ok "build.yml splices the platform fragment"
