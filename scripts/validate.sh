@@ -47,7 +47,17 @@ chk BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT true
 chk TARGET_NO_RECOVERY true
 grep -qE '^[[:space:]]*TARGET_NO_KERNEL[[:space:]]*:?=[[:space:]]*true' "$bc" && ok "TARGET_NO_KERNEL = true (vendor_boot carries no kernel segment)" || bad "TARGET_NO_KERNEL must be true"
 if grep -qE '^[[:space:]]*TARGET_PREBUILT_KERNEL[[:space:]]*:?=' "$bc"; then bad "TARGET_PREBUILT_KERNEL must not be set (manifest prebuilts path is absent)"; else ok "no TARGET_PREBUILT_KERNEL"; fi
-grep -qE '^[[:space:]]*TARGET_PREBUILT_DTB[[:space:]]*:?=' "$bc" && ok "TARGET_PREBUILT_DTB set" || bad "TARGET_PREBUILT_DTB missing"
+if grep -qE '^[[:space:]]*BOARD_PREBUILT_DTBIMAGE_DIR[[:space:]]*:?=' "$bc"; then
+  ok "BOARD_PREBUILT_DTBIMAGE_DIR set (core/Makefile cat rule builds dtb.img)"
+  [ -f "$ROOT/prebuilt/dtb_dir/tb375fc.dtb" ] && ok "prebuilt/dtb_dir/tb375fc.dtb present" || bad "prebuilt/dtb_dir/tb375fc.dtb missing"
+else
+  bad "BOARD_PREBUILT_DTBIMAGE_DIR missing (ninja: dtb.img needed by vendor_boot.img, no rule)"
+fi
+grep -qE '^[[:space:]]*TARGET_PREBUILT_DTB[[:space:]]*:?=' "$bc" && warn "TARGET_PREBUILT_DTB is not an AOSP variable (produces no rule)" || ok "no TARGET_PREBUILT_DTB"
+grep -qE '^[[:space:]]*BOARD_KERNEL_CMDLINE[[:space:]]*:?=[[:space:]]*bootopt=64S3,32N2,64N2' "$bc" && ok "vendor cmdline bootopt=64S3,32N2,64N2" || bad "BOARD_KERNEL_CMDLINE missing (feeds --vendor_cmdline)"
+for v in BOARD_AVB_ENABLE BOARD_AVB_ALGORITHM BOARD_AVB_KEY_PATH BOARD_AVB_VENDOR_BOOT_KEY_PATH BOARD_AVB_VENDOR_BOOT_ALGORITHM BOARD_AVB_VENDOR_BOOT_ROLLBACK_INDEX BOARD_AVB_VENDOR_BOOT_ROLLBACK_INDEX_LOCATION BOARD_AVB_VENDOR_BOOTIMAGE_KEY_PATH; do
+  grep -qE "^[[:space:]]*$v[[:space:]]*:?=" "$bc" && ok "$v set" || bad "$v missing (avbtool would run with no --algorithm/--key)"
+done
 
 sec "5. no QCOM leftovers (this is MediaTek)"
 for pat in BOARD_USES_QCOM_FBE_DECRYPTION TARGET_RECOVERY_QCOM_RTC_FIX QCOM_BOARD_PLATFORMS MSM8974; do
