@@ -206,6 +206,8 @@ enum nf_mode_t {
 };
 static nf_mode_t nf_mode = NF_M_NONE;
 static std::string nf_dir = "/sdcard";
+// 备份/还原可选的存储根：平板内存 / SD 卡 / U 盘。默认平板内存。
+static std::string nf_root = "/sdcard";
 static std::string nf_file;
 static std::vector<std::string> nf_sel;
 static std::vector<std::string> nf_list;""",
@@ -299,8 +301,8 @@ static void nf_add(const char* title, const char* detail, const char* command) {
 // What the top page shows when the device has no menu file yet.
 static void nf_load_defaults(void) {
   nf_menu.clear();
-  nf_add("备份分区", "勾选分区，存到 /sdcard/TWRP/BF日期时间", "@backup");
-  nf_add("还原分区", "浏览 /sdcard 任意文件夹，勾选镜像写回", "@restore");
+  nf_add("备份分区", "可选平板内存 / SD 卡 / U 盘，存到 TWRP/BF日期时间", "@backup");
+  nf_add("还原分区", "浏览 平板内存 / SD 卡 / U 盘，勾选镜像写回", "@restore");
   nf_add("关闭所有 Magisk 模组", "给每个启用中的模组放 disable 标记",
          "/system/bin/sh /system/bin/nf/nf_gui.sh magisk_off");
   nf_add("一键 root", "Magisk v31.1 补丁 init_boot 并写回",
@@ -366,6 +368,50 @@ static long long nf_file_size(const std::string& full_path) {
   struct stat info;
   if (stat(full_path.c_str(), &info) != 0) return 0;
   return static_cast<long long>(info.st_size);
+}
+
+// 某个存储根是否真的挂上了：查 /proc/mounts 的第二列。
+// 只看 stat() 不行 —— TWRP 的 ramdisk 里 /external_sd、/usb_otg 是空目录，
+// stat 成功但根本没挂卡，写进去会落到 rootfs（ramdisk）里白写。
+static bool nf_mounted(const std::string& path) {
+  std::FILE* fp = std::fopen("/proc/mounts", "r");
+  if (fp == nullptr) return false;
+  char buffer[512];
+  bool found = false;
+  while (!found && std::fgets(buffer, sizeof(buffer), fp) != nullptr) {
+    std::string text = buffer;
+    const size_t first = text.find(' ');
+    if (first == std::string::npos) continue;
+    const size_t second = text.find(' ', first + 1);
+    if (second == std::string::npos) continue;
+    if (text.substr(first + 1, second - first - 1) == path) found = true;
+  }
+  std::fclose(fp);
+  return found;
+}
+
+static const char* nf_root_label(const std::string& path) {
+  if (path == "/external_sd") return "SD 卡";
+  if (path == "/usb_otg") return "U 盘";
+  return "平板内存";
+}
+
+// 备份/还原页顶部的三行存储选择。未挂载的项点不动（提示先挂载）。
+static void nf_add_root_rows(void) {
+  static const char* const paths[] = {"/sdcard", "/external_sd", "/usb_otg"};
+  static const char* const command[] = {"@root:/sdcard", "@root:/external_sd",
+                                        "@root:/usb_otg"};
+  const std::string active_name = nf_root_label(nf_root);
+  nf_adds("存储位置（当前：" + active_name + "）", "点下面三项切换写入/读取的位置", "@none");
+  for (int i = 0; i < 3; ++i) {
+    const std::string path = paths[i];
+    const bool active = (nf_root == path);
+    const bool ready = (path == "/sdcard") ? true : nf_mounted(path);
+    std::string title = std::string(active ? "[✓] " : "[    ] ") + nf_root_label(path);
+    std::string detail = ready ? (active ? "当前写入位置" : "点一下切到这里")
+                               : "未挂载：先去 Mount 页挂上，或插好再回来";
+    nf_adds(title, detail, ready ? command[i] : "@none");
+  }
 }
 
 static std::string nf_human(long long bytes) {
@@ -517,6 +563,7 @@ static void nf_show_parts(const char* title, const char* action_command, const s
   nf_page_title = title;
   nf_menu.clear();
   nf_add("返回", hint.c_str(), "@menu");
+  if (std::strcmp(action_command, "@do_backup") == 0) nf_add_root_rows();
   nf_load_parts();
   for (const auto& name : nf_list) {
     const std::string mark = nf_selected(name) ? "[✓] " : "[    ] ";
@@ -541,7 +588,11 @@ static void nf_show_restore_dirs(void) {
   nf_page_title = "选择文件夹";
   nf_menu.clear();
   nf_add("返回上一页", nf_dir.c_str(), "@menu");
-  if (nf_dir != "/sdcard") nf_add("上一级", "回到上一层文件夹", "@up");
+  if (nf_dir != nf_root) nf_add("上一级", "回到上一层文件夹", "@up");
+  if (nf_dir == nf_root) {
+    if (nf_root != "/sdcard") nf_add("回到平板内存", "/sdcard/TWRP", "@root:/sdcard");
+    nf_add_root_rows();
+  }
   // 当前文件夹里有多少 .img，决定“用这个文件夹”这一行怎么显示
   std::vector<std::string> imgs;
   for (const auto& name : nf_scan(nf_dir)) {
@@ -590,14 +641,18 @@ static void nf_refresh_current(void) {
 // 返回键：选择页逐级退回，顶级页退出到主界面
 static void nf_refresh_or_back(void) {
   if (nf_mode == NF_M_OTA_FILE || nf_mode == NF_M_RESTORE_DIR) {
-    if (nf_dir == "/sdcard") {
+    // OTA 浏览固定在平板内存；还原浏览跟着所选存储根走
+    const std::string base = (nf_mode == NF_M_RESTORE_DIR) ? nf_root : std::string("/sdcard");
+    if (nf_dir == base) {
       nf_show_menu();
       return;
     }
     const size_t slash = nf_dir.find_last_of('/');
     if (slash != std::string::npos)
       nf_dir = slash == 0 ? std::string("/") : nf_dir.substr(0, slash);
-    if (nf_dir == "/") nf_dir = "/sdcard";
+    if (nf_dir == "/" || nf_dir.size() < base.size() ||
+        nf_dir.compare(0, base.size(), base) != 0)
+      nf_dir = base;
     nf_refresh_current();
     return;
   }
@@ -667,7 +722,7 @@ static void nf_row_event_cb(lv_event_t* event) {
   }
   if (command == "@restore") {
     nf_mode = NF_M_RESTORE_DIR;
-    nf_dir = "/sdcard";
+    nf_dir = nf_root;
     nf_sel.clear();
     nf_show_restore_dirs();
     return;
@@ -680,8 +735,23 @@ static void nf_row_event_cb(lv_event_t* event) {
       return;
     }
     const size_t slash = nf_dir.find_last_of('/');
-    if (slash != std::string::npos && nf_dir != "/sdcard")
-      nf_dir = slash == 0 ? std::string("/sdcard") : nf_dir.substr(0, slash);
+    if (slash != std::string::npos && nf_dir != nf_root)
+      nf_dir = slash == 0 ? nf_root : nf_dir.substr(0, slash);
+    // 别越过所选存储根（/sdcard、/external_sd、/usb_otg）
+    if (nf_dir == "/" || nf_dir.size() < nf_root.size() ||
+        nf_dir.compare(0, nf_root.size(), nf_root) != 0)
+      nf_dir = nf_root;
+    nf_refresh_current();
+    return;
+  }
+  // 存储位置切换：平板内存 / SD 卡 / U 盘
+  if (command.compare(0, 6, "@root:") == 0) {
+    nf_root = command.substr(6);
+    if (nf_mode == NF_M_RESTORE_DIR || nf_mode == NF_M_RESTORE_FILES) {
+      nf_mode = NF_M_RESTORE_DIR;
+      nf_dir = nf_root;
+      nf_sel.clear();
+    }
     nf_refresh_current();
     return;
   }
@@ -737,8 +807,13 @@ static void nf_row_event_cb(lv_event_t* event) {
       nf_run_command("备份分区", "还没有勾选分区", "echo 请先勾选至少一个分区");
       return;
     }
-    nf_run_command("备份分区", "备份 " + std::to_string(nf_sel.size()) + " 个分区",
-                   "/system/bin/sh /system/bin/nf/nf_gui.sh backup " + nf_sel_joined());
+    // NF_DEST 交给 nf_backup.sh：日期时间在设备上生成，路径跟着所选存储位置
+    const std::string dest = nf_root + "/TWRP/BF$(date +%Y%m%d%H%M%S)";
+    nf_run_command("备份分区",
+                   std::string(nf_root_label(nf_root)) + " / 备份 " +
+                       std::to_string(nf_sel.size()) + " 个分区",
+                   "NF_DEST=\"" + dest + "\" /system/bin/sh /system/bin/nf/nf_gui.sh backup " +
+                       nf_sel_joined());
     return;
   }
   if (command == "@do_ota") {
