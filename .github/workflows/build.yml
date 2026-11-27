@@ -202,10 +202,26 @@ jobs:
         run: |
           set -eo pipefail
           cd workspace
+          cp bootable/recovery/gui2/gui2.cpp /tmp/gui2.cpp.orig
           python3 "device/$DEVICE_PATH/scripts/nf_gui2_patch.py" bootable/recovery
-          grep -n 'NF_PROGRESS\|nf_prog_tick\|nf_start_job' bootable/recovery/gui2/tool_pages.cpp | head -20
-          echo "--- default tool menu ---"
-          grep -n '@backup\|@restore\|@magisk\|@log' bootable/recovery/gui2/tool_pages.cpp | head -20
+          # 注意两个坑：① tool_pages.cpp 在 gui2/pages/ 下，不是 gui2/ 根；
+          # ② pipefail 下 `cmd | head` 会因 SIGPIPE 判失败（run #25 就是 grep 路径写错
+          #    退出码 2 把整步打死，Build 被跳过、最后 "no image produced"）。全部落文件再读。
+          diff -u /tmp/gui2.cpp.orig bootable/recovery/gui2/gui2.cpp > /tmp/gui2.diff || true
+          wc -l /tmp/gui2.diff || true
+          head -n 40 /tmp/gui2.diff || true
+          grep -n 'NF_PROGRESS\|nf_prog_tick\|nf_run.log' bootable/recovery/gui2/gui2.cpp > /tmp/gui2.anchors || true
+          head -n 12 /tmp/gui2.anchors || true
+          test -s /tmp/gui2.anchors || { echo "NF progress page missing in gui2.cpp"; exit 6; }
+          echo "--- picker / browser anchors ---"
+          grep -n 'nf_toggle\|nf_scan\|@backup\|@restore' bootable/recovery/gui2/gui2.cpp > /tmp/gui2.menu || true
+          head -n 20 /tmp/gui2.menu || true
+          test -s /tmp/gui2.menu || { echo "partition picker anchors missing"; exit 7; }
+          echo "--- 默认菜单（不应出现 OTA / 9008）---"
+          grep -n 'nf_ota.sh\|nf_edl.sh' bootable/recovery/gui2/gui2.cpp > /tmp/gui2.bad || true
+          if [ -s /tmp/gui2.bad ]; then
+            cat /tmp/gui2.bad; echo "OTA/9008 entries still present"; exit 5
+          fi
 
       - name: Build
         id: build
