@@ -430,25 +430,39 @@ static bool nf_part_skip(const std::string& name) {
   return name.compare(0, 12, "ALIGN_TO_128") == 0;
 }
 
+// 当前槽后缀（_a/_b）：/proc/cmdline 的 androidboot.slot_suffix 最靠谱，
+// recovery 里 getprop 有时还没填，读不到就按 _a 处理（本机 current-slot a）。
+static std::string nf_slot_suffix(void) {
+  std::string line;
+  std::FILE* fp = std::fopen("/proc/cmdline", "r");
+  if (fp != nullptr) {
+    char buffer[1024];
+    if (std::fgets(buffer, sizeof(buffer), fp) != nullptr) line = buffer;
+    std::fclose(fp);
+  }
+  if (line.find("slot_suffix=_b") != std::string::npos) return "_b";
+  if (line.find("slot_suffix=_a") != std::string::npos) return "_a";
+  return "_a";
+}
+
 static void nf_load_parts(void) {
   std::vector<std::string> raw = nf_scan("/dev/block/by-name");
+  const std::string slot = nf_slot_suffix();
+  const std::string other = (slot == "_a") ? std::string("_b") : std::string("_a");
   std::vector<std::string> kept;
   for (const auto& name : raw) {
     if (nf_part_skip(name)) continue;
-    // A/B 机（MTK）的 by-name 同时给三级别名：boot、boot_a、boot_b。
-    // 裸名只是"当前槽"的别名，列表里只保留 _a / _b，否则每个分区都会出现三行。
-    // 脚本侧 nf_dev() 已支持裸名与槽名，去掉裸名不影响备份/还原。
-    if (!nf_ends_with(name, "_a") && !nf_ends_with(name, "_b")) {
-      bool slotted = false;
-      for (const auto& other : raw) {
-        if (other.size() == name.size() + 2 &&
-            (nf_ends_with(other, "_a") || nf_ends_with(other, "_b")) &&
-            other.compare(0, name.size(), name) == 0) {
-          slotted = true;
-          break;
-        }
-      }
-      if (slotted) continue;
+    // MTK A/B 机的 by-name 同时有三级别名：boot、boot_a、boot_b（boot 只是当前槽
+    // 的别名），以前三行全列，看着像三个分区。规则：
+    //   ① 另一槽的 xxx_b：只有本槽那份 / 裸名都不存在时才保留（个别分区只做单槽）；
+    //   ② 裸名 xxx：有槽位兄弟就不单列，避免重复。
+    if (nf_ends_with(name, other.c_str())) {
+      const std::string base = name.substr(0, name.size() - 2);
+      if (std::find(raw.begin(), raw.end(), base + slot) != raw.end()) continue;
+      if (std::find(raw.begin(), raw.end(), base) != raw.end()) continue;
+    } else if (!nf_ends_with(name, "_a") && !nf_ends_with(name, "_b")) {
+      if (std::find(raw.begin(), raw.end(), name + slot) != raw.end()) continue;
+      if (std::find(raw.begin(), raw.end(), name + other) != raw.end()) continue;
     }
     kept.push_back(name);
   }
