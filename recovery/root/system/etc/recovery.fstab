@@ -21,7 +21,8 @@ system_dlkm                  /system_dlkm    ext4    ro                        w
 /dev/block/by-name/userdata  /data           f2fs    noatime,nosuid,nodev,discard,noflush_merge,fsync_mode=nobarrier,reserve_root=134217,resgid=1065,inlinecrypt  wait,check,formattable,quota,latemount,resize,reservedsize=128m,checkpoint=fs,fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized,keydirectory=/metadata/vold/metadata_encryption,fsverity
 /dev/block/by-name/misc      /misc           emmc    defaults                  defaults
 
-# No microSD slot or verified USB mass-storage block device on this unit.
-# sda/sdb are internal UFS boot LUNs, not USB disks; sda1 does not exist.
-# Do not expose a guessed USB OTG path: Mount does not filter Is_Present.
-# MicroSD card storage uses /dev/block/mmcblk1* (MSDC1 controller 11240000.mmc).
+# MicroSD card storage: this unit's card lands on /dev/block/mmcblk0p1 (exFAT).
+# Verified on device 2026-11-27: `mount -t exfat /dev/block/mmcblk0p1` mounts 477 G
+# with the card's DCIM/Android tree readable. The ueventd-created mmcblk1 alias
+# points at mmcblk0, but its mmcblk1p1 symlink is broken (self-referential), so
+# never use mmcblk1p1 here - TWRP then logs "Can't probe device".
