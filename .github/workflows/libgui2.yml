@@ -150,8 +150,13 @@ jobs:
           cp bootable/recovery/gui2/gui2.cpp /tmp/gui2.cpp.orig
           python3 "device/$DEVICE_PATH/scripts/nf_gui2_patch.py" bootable/recovery
           echo "--- 补丁后差异统计 ---"
-          diff -u /tmp/gui2.cpp.orig bootable/recovery/gui2/gui2.cpp | head -n 80 || true
-          grep -n 'nf_prog_tick\|nf_start_job' bootable/recovery/gui2/gui2.cpp | head -n 10
+          # 不要 `diff ... | head`：head 提前关管道会让 diff 收到 SIGPIPE，pipefail 下整步判失败（run #3 即此）
+          diff -u /tmp/gui2.cpp.orig bootable/recovery/gui2/gui2.cpp > /tmp/gui2.diff || true
+          wc -l /tmp/gui2.diff || true
+          head -n 60 /tmp/gui2.diff || true
+          grep -n 'nf_prog_tick\|nf_start_job\|nf_run.log' bootable/recovery/gui2/gui2.cpp > /tmp/gui2.anchors || true
+          head -n 12 /tmp/gui2.anchors || true
+          test -s /tmp/gui2.anchors || { echo "live progress page missing"; exit 6; }
           grep -n 'build_nf_tools_page' bootable/recovery/gui2/pages/tool_pages.cpp bootable/recovery/gui2/pages/tool_pages.h || true
           grep -n 'NF_TOOLS' bootable/recovery/gui2/pages/page_router.h bootable/recovery/gui2/gui2.cpp | head -n 20 || true
           echo "--- 默认菜单（不应出现 OTA / 9008）---"
