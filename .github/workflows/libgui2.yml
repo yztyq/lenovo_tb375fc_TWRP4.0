@@ -1,0 +1,222 @@
+name: Build libgui2 (NF tools + live log)
+
+# 只编 libgui2 一个库：本机现有镜像（v11 起）用的就是这棵树的 HEAD，
+# 换掉 libgui2 即可，不用整套 vendor_boot 重编，也不会碰已经验证过的
+# VINTF/SELinux/触摸/解密配方。
+#
+# 产出 out/**/libgui2.so + 匹配清单（含 md5 与 NEEDED/UND 统计），
+# 由本地脚本塞回 vendor_boot 镜像。
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_url:
+        description: 'TWRP minimal manifest URL'
+        required: false
+        default: 'https://github.com/TWRP-Test/platform_manifest_twrp_aosp'
+      manifest_branch:
+        description: 'Manifest branch (TWRP 4.0 = twrp-16.0)'
+        required: false
+        default: 'twrp-16.0'
+      device_path:
+        description: 'Device tree path inside the source tree'
+        required: false
+        default: 'lenovo/tb375fc'
+      lunch_target:
+        description: 'Lunch target'
+        required: false
+        default: 'twrp_tb375fc-aosp_current-eng'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  libgui2:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Compute build metadata
+        id: meta
+        run: |
+          TS=$(date -u +%Y%m%d-%H%M%S)
+          SHA7=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "ts=$TS" >> "$GITHUB_OUTPUT"
+          echo "sha7=$SHA7" >> "$GITHUB_OUTPUT"
+          echo "outname=libgui2_${TS}_${SHA7}" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        run: |
+          set -x
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/local/lib/android/sdk
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/lib/jvm
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo apt-get clean
+          df -h
+
+      - name: Set up swap
+        run: |
+          set -x
+          SWAP_KB=$(awk '/^SwapTotal/ {print $2}' /proc/meminfo)
+          echo "existing swap: ${SWAP_KB:-0} kB"
+          if [ "${SWAP_KB:-0}" -lt 20000000 ]; then
+            sudo swapoff -a || true
+            sudo rm -f /swapfile || true
+            sudo fallocate -l 20G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=20480 status=none || true
+            sudo chmod 600 /swapfile || true
+            sudo mkswap /swapfile || true
+            sudo swapon /swapfile || true
+          fi
+          free -h
+          exit 0
+
+      - name: Install dependencies
+        run: |
+          set -x
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends git-core gnupg flex bison build-essential \
+            zip unzip curl wget rsync libc6-dev-i386 lib32ncurses5-dev x11proto-core-dev \
+            libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc fontconfig lz4 \
+            python3 python-is-python3 python3-pip ccache
+          true
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          max-size: 2G
+
+      - name: Init repo
+        env:
+          MANIFEST_URL: ${{ inputs.manifest_url }}
+          MANIFEST_BRANCH: ${{ inputs.manifest_branch }}
+        run: |
+          set -eo pipefail
+          git config --global user.name  "ci-builder"
+          git config --global user.email "ci@localhost"
+          git config --global color.ui false
+          mkdir -p ~/bin
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          export PATH=~/bin:$PATH
+          mkdir -p workspace && cd workspace
+          repo init --depth=1 --no-clone-bundle -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" 2>&1 | tail -40
+
+      - name: Repo sync
+        run: |
+          set -x
+          export PATH=~/bin:$PATH
+          cd workspace
+          mkdir -p artifacts
+          ( while true; do sleep 300; echo "[heartbeat $(date -u)] .repo=$(du -sh .repo 2>/dev/null | cut -f1)"; done ) &
+          HB=$!
+          repo sync -c -j4 --force-sync --no-clone-bundle --no-tags > /tmp/repo_sync.log 2>&1
+          RC=$?
+          kill $HB 2>/dev/null || true
+          tail -60 /tmp/repo_sync.log
+          cp /tmp/repo_sync.log artifacts/repo_sync.log || true
+          exit $RC
+
+      - name: Drop .repo to free disk
+        run: |
+          cd workspace
+          rm -rf .repo
+          df -h /
+
+      - name: Place device tree
+        env:
+          DEVICE_PATH: ${{ inputs.device_path }}
+        run: |
+          set -eo pipefail
+          cd workspace
+          rm -rf "device/$DEVICE_PATH"
+          mkdir -p "device/$(dirname "$DEVICE_PATH")"
+          git clone --depth=1 "https://github.com/${GITHUB_REPOSITORY}" "device/$DEVICE_PATH"
+          ls "device/$DEVICE_PATH"
+
+      - name: Patch gui2 (NF tools page + live command output)
+        env:
+          DEVICE_PATH: ${{ inputs.device_path }}
+        run: |
+          set -eo pipefail
+          cd workspace
+          cp bootable/recovery/gui2/gui2.cpp /tmp/gui2.cpp.orig
+          python3 "device/$DEVICE_PATH/scripts/nf_gui2_patch.py" bootable/recovery
+          echo "--- 补丁后差异统计 ---"
+          diff -u /tmp/gui2.cpp.orig bootable/recovery/gui2/gui2.cpp | head -n 80 || true
+          grep -n 'run_streaming' bootable/recovery/gui2/backend/twrp_tools_backend.cpp
+          grep -n 'build_nf_tools_page' bootable/recovery/gui2/pages/tool_pages.cpp bootable/recovery/gui2/pages/tool_pages.h
+          grep -n 'NF_TOOLS' bootable/recovery/gui2/pages/page_router.h bootable/recovery/gui2/gui2.cpp | head -n 20
+
+      - name: Build libgui2
+        env:
+          LUNCH_TARGET: ${{ inputs.lunch_target }}
+        run: |
+          set -x
+          cd workspace
+          export GOMEMLIMIT=8GiB
+          export GOGC=25
+          source build/envsetup.sh
+          set +e
+          lunch "$LUNCH_TARGET" > /tmp/lunch.log 2>&1
+          LUNCH_RC=$?
+          echo "== lunch rc=$LUNCH_RC =="
+          tail -n 120 /tmp/lunch.log
+          cp /tmp/lunch.log artifacts/lunch.log || true
+          if [ $LUNCH_RC -ne 0 ]; then exit $LUNCH_RC; fi
+          trap 'cp /tmp/build.log artifacts/build.log 2>/dev/null || true; free -h || true; df -h / || true; exit 143' TERM INT
+          set -o pipefail
+          mka -j2 libgui2 2>&1 | tee /tmp/build.log
+          BUILD_RC=${PIPESTATUS[0]}
+          trap - TERM INT
+          echo "== build rc=$BUILD_RC =="
+          tail -n 200 /tmp/build.log
+          cp /tmp/build.log artifacts/build.log || true
+          exit $BUILD_RC
+
+      - name: Collect libgui2
+        if: always()
+        env:
+          OUTNAME: ${{ steps.meta.outputs.outname }}
+        run: |
+          set -x
+          cd workspace
+          mkdir -p artifacts
+          mapfile -t SO < <(find out -name 'libgui2.so' -type f 2>/dev/null)
+          echo "matches: ${#SO[@]}"
+          : > "artifacts/${OUTNAME}.txt"
+          for f in "${SO[@]}"; do
+            {
+              echo "path=$f"
+              echo "size=$(stat -c%s "$f")"
+              echo "md5=$(md5sum "$f" | cut -d' ' -f1)"
+              echo "sha256=$(sha256sum "$f" | cut -d' ' -f1)"
+              echo "needed=$(readelf -d "$f" | awk -F'[][]' '/NEEDED/ {printf "%s ", $2}')"
+              echo "und=$(readelf --dyn-syms "$f" | awk '$7=="UND" && $8!="" {print $8}' | sort -u | wc -l)"
+              echo "---"
+            } >> "artifacts/${OUTNAME}.txt"
+          done
+          cat "artifacts/${OUTNAME}.txt" || true
+          if [ "${#SO[@]}" -gt 0 ]; then
+            tar czf "artifacts/${OUTNAME}.tgz" "${SO[@]}"
+            ls -l "artifacts/${OUTNAME}.tgz"
+            md5sum "artifacts/${OUTNAME}.tgz"
+          else
+            echo "no libgui2.so produced"
+          fi
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.outname }}
+          path: workspace/artifacts/*
+          if-no-files-found: warn
+          retention-days: 30
