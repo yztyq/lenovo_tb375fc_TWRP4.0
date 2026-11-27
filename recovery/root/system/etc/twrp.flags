@@ -5,7 +5,7 @@
 /metadata         f2fs    /dev/block/by-name/metadata        flags=display="Metadata";backup=1;wipeingui=0
 /data             f2fs    /dev/block/by-name/userdata        flags=display="Data";fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized;keydirectory=/metadata/vold/metadata_encryption
 /usb_otg          auto    /dev/block/usb_otg1                  flags=display="USB Storage";storage;wipeingui;removable
-/external_sd      auto    /dev/block/mmcblk1p1                 flags=display="MicroSD";storage;wipeingui;removable
+/external_sd      exfat   /dev/block/mmcblk0p1                 flags=display="MicroSD";storage;wipeingui;removable
 
 # Capitalize only the first letter, preserving technical underscores.
 # erofs/ext4 alternatives stay in recovery.fstab; these entries set labels.
