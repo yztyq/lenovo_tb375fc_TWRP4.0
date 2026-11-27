@@ -431,10 +431,27 @@ static bool nf_part_skip(const std::string& name) {
 }
 
 static void nf_load_parts(void) {
-  nf_list = nf_scan("/dev/block/by-name");
+  std::vector<std::string> raw = nf_scan("/dev/block/by-name");
   std::vector<std::string> kept;
-  for (const auto& name : nf_list)
-    if (!nf_part_skip(name)) kept.push_back(name);
+  for (const auto& name : raw) {
+    if (nf_part_skip(name)) continue;
+    // A/B 机（MTK）的 by-name 同时给三级别名：boot、boot_a、boot_b。
+    // 裸名只是"当前槽"的别名，列表里只保留 _a / _b，否则每个分区都会出现三行。
+    // 脚本侧 nf_dev() 已支持裸名与槽名，去掉裸名不影响备份/还原。
+    if (!nf_ends_with(name, "_a") && !nf_ends_with(name, "_b")) {
+      bool slotted = false;
+      for (const auto& other : raw) {
+        if (other.size() == name.size() + 2 &&
+            (nf_ends_with(other, "_a") || nf_ends_with(other, "_b")) &&
+            other.compare(0, name.size(), name) == 0) {
+          slotted = true;
+          break;
+        }
+      }
+      if (slotted) continue;
+    }
+    kept.push_back(name);
+  }
   nf_list = kept;
 }
 
