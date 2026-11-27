@@ -98,7 +98,10 @@ BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE := 67108864
 # INTERNAL_KERNEL_CMDLINE := $(BOARD_KERNEL_CMDLINE) and core/Makefile:1668
 # passes it as --vendor_cmdline to mkbootimg for vendor_boot. The stock vendor_boot
 # header stores exactly this string (read from the image, cmdline[2048] at offset 28).
-BOARD_KERNEL_CMDLINE := bootopt=64S3,32N2,64N2
+# `androidboot.selinux=permissive` MUST stay on the end: TWRP starts before /vendor
+# policy is loaded, the boot HAL then gets EACCES reading /dev/block/sdc1 and SIGABRTs,
+# which is what made v1..v6 hang at the logo. Verified on device from v1 onward, keep it.
+BOARD_KERNEL_CMDLINE := bootopt=64S3,32N2,64N2 androidboot.selinux=permissive
 
 # A/B
 AB_OTA_UPDATER := true
