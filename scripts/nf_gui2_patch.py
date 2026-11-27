@@ -807,12 +807,14 @@ static void nf_row_event_cb(lv_event_t* event) {
       nf_run_command("备份分区", "还没有勾选分区", "echo 请先勾选至少一个分区");
       return;
     }
-    // NF_DEST 交给 nf_backup.sh：日期时间在设备上生成，路径跟着所选存储位置
-    const std::string dest = nf_root + "/TWRP/BF$(date +%Y%m%d%H%M%S)";
+    // 目标根目录交给 nf_gui.sh 自己拼（目录名里的 $(date) 在设备上展开）。
+    // 用 NF_ROOT 而不是 NF_DEST：这里绝不能往 C++ 字面量里塞引号和 $()，
+    // 之前就是引号被吞掉，命令变成 "NF_DEST= + dest +  /system/bin/sh ..."，
+    // shell 把 "+" 当命令执行，日志只有 "sh: +: inaccessible or not found"。
     nf_run_command("备份分区",
                    std::string(nf_root_label(nf_root)) + " / 备份 " +
                        std::to_string(nf_sel.size()) + " 个分区",
-                   "NF_DEST=\"" + dest + "\" /system/bin/sh /system/bin/nf/nf_gui.sh backup " +
+                   "NF_ROOT=" + nf_root + " /system/bin/sh /system/bin/nf/nf_gui.sh backup " +
                        nf_sel_joined());
     return;
   }
