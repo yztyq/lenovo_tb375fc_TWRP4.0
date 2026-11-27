@@ -151,9 +151,14 @@ jobs:
           python3 "device/$DEVICE_PATH/scripts/nf_gui2_patch.py" bootable/recovery
           echo "--- 补丁后差异统计 ---"
           diff -u /tmp/gui2.cpp.orig bootable/recovery/gui2/gui2.cpp | head -n 80 || true
-          grep -n 'run_streaming' bootable/recovery/gui2/backend/twrp_tools_backend.cpp
-          grep -n 'build_nf_tools_page' bootable/recovery/gui2/pages/tool_pages.cpp bootable/recovery/gui2/pages/tool_pages.h
-          grep -n 'NF_TOOLS' bootable/recovery/gui2/pages/page_router.h bootable/recovery/gui2/gui2.cpp | head -n 20
+          grep -n 'nf_prog_tick\|nf_start_job' bootable/recovery/gui2/gui2.cpp | head -n 10
+          grep -n 'build_nf_tools_page' bootable/recovery/gui2/pages/tool_pages.cpp bootable/recovery/gui2/pages/tool_pages.h || true
+          grep -n 'NF_TOOLS' bootable/recovery/gui2/pages/page_router.h bootable/recovery/gui2/gui2.cpp | head -n 20 || true
+          echo "--- 默认菜单（不应出现 OTA / 9008）---"
+          grep -n '@backup\|@restore\|@magisk\|@log' bootable/recovery/gui2/gui2.cpp | head -n 20 || true
+          if grep -n 'nf_ota.sh\|nf_edl.sh' bootable/recovery/gui2/gui2.cpp; then
+            echo "OTA/9008 entries still present"; exit 5
+          fi
 
       - name: Build libgui2
         env:

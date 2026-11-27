@@ -179,6 +179,34 @@ jobs:
           python3 "device/$DEVICE_PATH/scripts/patch_drm_legacy.py" "$F"
           grep -n 'legacy_modeset = version->name' -A4 "$F"
 
+      - name: Patch touch rotation default for the portrait panel
+        # 面板 NVTCapacitiveTouchScreen 原生竖屏（X 0..18400 / Y 0..29440），
+        # 界面是 2944x1840 横屏，必须 270 度映射。实机 prop.default 里有
+        # ro.twrp.touch.rotation=270，但全量构建会重建 recovery root，
+        # 因此把 270 也编译进默认值（有属性时属性仍然优先）。
+        env:
+          DEVICE_PATH: ${{ inputs.device_path }}
+        run: |
+          set -eo pipefail
+          cd workspace
+          F=bootable/recovery/twrpminui/twrp_input.cpp
+          test -f "$F" || { echo "missing $F"; exit 4; }
+          python3 "device/$DEVICE_PATH/scripts/patch_touch_rotation.py" "$F"
+          grep -n 'touch_rotation = ' "$F" | tail -5
+
+      - name: Patch gui2 with the NF advanced tools page
+        # 红魔 NX809J 那版的进阶功能页：分区可勾选、fork+定时器实时输出、
+        # MTK 机型不带“一键 9008”。补丁脚本本体与 libgui2.yml 共用。
+        env:
+          DEVICE_PATH: ${{ inputs.device_path }}
+        run: |
+          set -eo pipefail
+          cd workspace
+          python3 "device/$DEVICE_PATH/scripts/nf_gui2_patch.py" bootable/recovery
+          grep -n 'NF_PROGRESS\|nf_prog_tick\|nf_start_job' bootable/recovery/gui2/tool_pages.cpp | head -20
+          echo "--- default tool menu ---"
+          grep -n '@backup\|@restore\|@magisk\|@log' bootable/recovery/gui2/tool_pages.cpp | head -20
+
       - name: Build
         id: build
         env:
