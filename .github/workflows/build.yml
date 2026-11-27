@@ -404,22 +404,29 @@ jobs:
             echo "| 构建时间 (UTC) | ${{ steps.meta.outputs.ts }} |"
             echo
             echo "### 结构"
-            echo "vendor_boot v4 两片：platform(type=1，官方 6.1.138 模块) + recovery(type=2，本树 OrangeFox/TWRP ramdisk)，"
-            echo "镜像总大小 67,108,864 B (64 MiB)。"
+            echo "vendor_boot v4 两片：platform(type=1，官方 6.1.138 模块) + recovery(type=2，本树 TWRP ramdisk)，"
+            echo "镜像总大小 67,108,864 B (64 MiB)。cmdline 含 \`androidboot.selinux=permissive\`。"
+            echo
+            echo "### 已实机验证（v1-v14 同一套配方）"
+            echo "- 显示：twrpminui 走 legacy KMS，面板 2944x1840 @144"
+            echo "- 触控：\`ro.twrp.touch.rotation=270\`，坐标与横屏方向对齐；启动后约 2-5 s 触控才就绪"
+            echo "- 启动：cmdline permissive，boot HAL 不再 SIGABRT"
+            echo "- /data：VINTF manifest 7.0 + sepolicy 34，keymint3 / gatekeeper1 / keystore2，图形密码可解密"
+            echo "- fastbootd：已从 manifest 移除 android.hardware.fastboot 声明后 PC 能识别"
+            echo "- 进阶功能页：备份/还原分区可自行勾选、400ms 轮询实时日志、一键 root、关 Magisk 模组、导出恢复日志"
             echo
             echo "### 刷入"
             echo '```'
             echo "adb reboot bootloader"
             echo "fastboot flash vendor_boot $(basename "$IMG")"
-            echo "fastboot reboot recovery"
             echo '```'
             echo
             echo "刷之前先备份官方原片 vendor_boot.img（TB375FC_ZUX_1.1.04.287_Tool/image 下，"
             echo "vrs 26,902,388，md5 E60D9F853E08CDE9D099EA1143D760F8），用于回滚。"
             echo
             echo "### 注意"
-            echo "- 本包未做实机验证，第一次刷入请准备好官方原片回滚。"
-            echo "- 如果刷完能进 recovery 但重启又回系统，先排查 AVB footer。"
+            echo "- 进 recovery 请不要点 Format Data；解密用图形密码，不要先点\"取消\"。"
+            echo "- 想回系统：Recovery 里 Reboot → System，或 fastboot reboot。"
           } > release_notes.md
           cat release_notes.md
 
@@ -430,8 +437,8 @@ jobs:
         continue-on-error: true
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: twrp-tb375fc-${{ steps.meta.outputs.ts }}
-          name: TWRP 4.0 TB375FC ${{ steps.meta.outputs.ts }}
+          tag_name: twrp-tb375fc-c1-${{ steps.meta.outputs.ts }}
+          name: TWRP 4.0 TB375FC c1 ${{ steps.meta.outputs.ts }}
           body_path: workspace/release_notes.md
           prerelease: true
           fail_on_unmatched_files: false
