@@ -47,12 +47,16 @@ ota)
     fi
     ;;
 backup)
+    # 2026-11-28 修：先 shift 掉 "backup" 本身，否则它会被当成一个分区名；
+    # 目标目录优先用调用方给的 NF_DEST（GUI 的存储位置选择：平板/SD卡/U盘），
+    # 没给才回落到 /sdcard/TWRP/BF时间戳。
+    shift
     if [ $# -ge 1 ]; then
         parts="$*"
     else
         parts="$KEY_PARTS"
     fi
-    DEST="$TWRP_DIR/BF$(date +%Y%m%d%H%M%S)"
+    DEST="${NF_DEST:-$TWRP_DIR/BF$(date +%Y%m%d%H%M%S)}"
     nf_say "== 备份到 $DEST"
     NF_DEST="$DEST" sh "$NF/nf_backup.sh" $parts
     ;;
