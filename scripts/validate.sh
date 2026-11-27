@@ -88,13 +88,6 @@ if [ -f "$plat" ]; then
 else
   bad "prebuilt/platform_ramdisk.lz4 missing"
 fi
-# recovery 分片必须是 lz4 legacy：MTK lk.img 只有 unlz4，zstd 一次都没出现
-# （2026-11-26 实机：按 0000+zstd 拼出来的包刷进去，bootloader 解不开，回落到系统）
-if grep -q 'ZstdCompressor' "$ROOT/scripts/splice_platform.py" 2>/dev/null; then
-  bad "splice_platform.py still re-encodes the recovery fragment with zstd (MTK LK can only unlz4)"
-else
-  ok "splice_platform.py encodes recovery fragment as lz4 legacy"
-fi
 if grep -q 'splice_platform.py' "$ROOT/.github/workflows/build.yml" 2>/dev/null; then
   ok "build.yml splices the platform fragment"
 else

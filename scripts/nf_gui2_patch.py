@@ -299,11 +299,8 @@ static void nf_add(const char* title, const char* detail, const char* command) {
 // What the top page shows when the device has no menu file yet.
 static void nf_load_defaults(void) {
   nf_menu.clear();
-  nf_add("安装 OTA 包", "选 zip / payload.bin，再勾选要写入的分区", "@ota");
   nf_add("备份分区", "勾选分区，存到 /sdcard/TWRP/BF日期时间", "@backup");
   nf_add("还原分区", "浏览 /sdcard 任意文件夹，勾选镜像写回", "@restore");
-  nf_add("一键进入 9008", "切到 EDL 下载模式",
-         "/system/bin/sh /system/bin/nf/nf_gui.sh edl");
   nf_add("关闭所有 Magisk 模组", "给每个启用中的模组放 disable 标记",
          "/system/bin/sh /system/bin/nf/nf_gui.sh magisk_off");
   nf_add("一键 root", "Magisk v31.1 补丁 init_boot 并写回",
@@ -1067,3 +1064,4 @@ static void open_nf_main_menu(page_transition transition) {""",
     ],
 )
 print("gui2 extra tools patch applied")
+

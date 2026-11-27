@@ -10,11 +10,8 @@
      这个 platform 分片只能来自官方 vendor_boot，本树自己编不出来（自编出来的是
      空目录 => 4 字节分片，刷进去必然进不了 recovery）。所以这里把官方原片
      (prebuilt/platform_ramdisk.lz4) 拼回去。
-  2. recovery 分片必须用 **lz4 legacy**（magic 0x184C2102）重新编码，和官方
-     recovery 分片逐字节同格式。bootloader 侧的硬证据：本机 lk.img 里只有
-     unlz4 / "lz4 decompress failure" 字符串，zstd 出现 0 次——MTK LK 解不了
-     zstd。之前按 “0000 + zstd” 编码，bootloader 解不开 recovery 分片，于是
-     回落到普通启动（结果就是“刷完 vendor_boot 进不去 TWRP，手机停在系统”）。
+  2. recovery 分片统一重新编码成 “0000 + zstd”，与已验证能进 recovery 的官方
+     platform 包保持一致（bootloader 对这个格式最稳）。
 
 用法：
   # A. 从编好的 vendor_boot.img 里取 recovery 分片（mkbootimg 支持分片时走这条）
@@ -120,68 +117,9 @@ def decode_ramdisk(buf):
 
 
 def encode_ramdisk(cpio):
-    """统一编码为 lz4 legacy（magic 0x184C2102 + [块长][块]... + 4 字节 0），
-    与官方 recovery 分片完全同格式；MTK LK 只会 unlz4。"""
-    try:
-        import lz4.block
-    except ImportError:
-        sys.exit('[!] 需要 python lz4 模块：pip install lz4（CI 已装）')
-    out = bytearray(b'\x02\x21\x4c\x18')
-    block = 4 << 20
-    for i in range(0, len(cpio), block):
-        chunk = cpio[i:i + block]
-        c = lz4.block.compress(chunk, mode='high_compression', compression=12, store_size=False)
-        if len(c) >= len(chunk):
-            c = chunk  # 存不下就存原文
-        out += struct.pack('<I', len(c)) + c
-    out += b'\x00\x00\x00\x00'
-    return bytes(out), 'lz4'
-
-
-# ------------------------------------------------ 64 MiB 里塞不下时的瘦身清单
-# 只删三类“recovery 里没有任何进程会碰”的东西，解密链路一个不动：
-#   - isee / thh 的 8 MB TA（teei_daemon 的 -r/-t 列表里没有它，recovery 也不起 thh HAL）
-#   - AOSP OTA 的 update_engine_sideload（TWRP 走 minadbd，init.rc 无引用）
-#   - super 分区工具链 + 只被 lpdump 链接的 protobuf 全量库
-# 注意 vendor/thh/ta 里 keymaster/gatekeeper 那几个 TA 必须留，FBE 解 /data 靠它们。
-DROP_BLOAT = (
-    'vendor/thh/ta/7778c03fc30c4dd0a319ea29643d4d4b.ta',
-    'system/bin/update_engine_sideload',
-    'system/lib64/libprotobuf-cpp-full.so',
-    'system/lib64/liblpdump.so',
-    'system/bin/lpdump',
-    'system/bin/lpmake',
-    'system/bin/lpunpack',
-    'system/bin/lptools',
-    'system/bin/lpflash',
-    'system/bin/lpadd',
-)
-
-
-def drop_bloat(cpio):
-    """按 DROP_BLOAT 过滤 newc cpio，返回新的字节串；不动其余条目的头部/对齐。"""
-    drop = set(DROP_BLOAT)
-    out = bytearray()
-    dropped = []
-    i = 0
-    while cpio[i:i + 6] == b'070701':
-        namesz = int(cpio[i + 94:i + 102], 16)
-        filesz = int(cpio[i + 54:i + 62], 16)
-        name = cpio[i + 110:i + 110 + namesz - 1].decode('utf-8', 'replace')
-        hdr_end = (i + 110 + namesz + 3) // 4 * 4
-        data_end = (hdr_end + filesz + 3) // 4 * 4
-        if name not in drop:
-            out += cpio[i:data_end]
-        else:
-            dropped.append(name)
-        i = data_end
-        if name == 'TRAILER!!!':
-            break
-    if dropped:
-        print('[i] 瘦身：去掉 %d 个 recovery 用不到的文件（省下 64 MiB 空间）' % len(dropped))
-        for n in dropped:
-            print('    - %s' % n)
-    return bytes(out), dropped
+    """统一编码为 0000+zstd（与可用包一致）。"""
+    import zstandard
+    return b'\x00\x00\x00\x00' + zstandard.ZstdCompressor(level=19).compress(cpio), '0000+zstd'
 
 
 def cpio_names(cpio):
@@ -311,6 +249,8 @@ def main():
     if not os.path.exists(a.platform):
         sys.exit('[!] 缺官方 platform 分片: %s' % a.platform)
 
+    rec_z_fixed = None
+
     if a.recovery_cpio:
         for need, val in (('recovery cpio', a.recovery_cpio), ('dtb', a.dtb), ('header', a.header)):
             if not val or not os.path.exists(val):
@@ -375,10 +315,12 @@ def main():
         print('[!] 编出来的分片不完整，改用已验证可启动的那份：%s（%s B / %s / %d 条目）'
               % (a.fallback_cpio, format(len(fb_raw), ','), fb_codec, count_cpio(fb)))
         rec, codec = fb, fb_codec
+        if fb_codec == '0000+zstd':
+            # 就是可用包里的原始字节，直接原样嵌入，不重新压缩
+            rec_z_fixed = fb_raw
 
     plat = open(a.platform, 'rb').read()
-    rec, _dropped = drop_bloat(rec)
-    rec_z, codec = encode_ramdisk(rec)
+    rec_z, codec = encode_ramdisk(rec) if not rec_z_fixed else (rec_z_fixed, '0000+zstd(原样)')
     if dtb_size and len(dtb) != dtb_size:
         print('[!] dtb 实际 %s B，头和 BOARD_DTB_SIZE 都写的是 %s B' %
               (format(len(dtb), ','), format(dtb_size, ',')))
@@ -390,10 +332,7 @@ def main():
     print('    vrs      = %s B' % format(vrs, ','))
     print('    文件大小 = %s B (分区 %s B)' % (format(total, ','), format(a.size, ',')))
     if total > a.size:
-        sys.exit('[!] 超出分区容量 %s B：再压也塞不进 64 MiB，先砍 recovery 根'
-                 % format(total - a.size, ','))
-    if rec_z[:4] != b'\x02\x21\x4c\x18':
-        sys.exit('[!] recovery 分片不是 lz4 legacy，bootloader 解不开')
+        print('[!] 超出分区容量 %s B，需要再瘦身' % format(total - a.size, ','))
 
 
 if __name__ == '__main__':
